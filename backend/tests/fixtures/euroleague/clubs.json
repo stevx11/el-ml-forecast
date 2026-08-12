@@ -1,0 +1,44 @@
+{
+  "data": [
+    {
+      "code": "PAR",
+      "name": "Partizan Mozzart Bet Belgrade",
+      "abbreviatedName": "Partizan",
+      "editorialName": "Partizan",
+      "tvCode": "PAR",
+      "isVirtual": false,
+      "clubPermanentName": "Partizan Mozzart Bet Belgrade",
+      "clubPermanentAlias": "Partizan",
+      "country": { "code": "SRB", "name": "Serbia" },
+      "city": "BELGRADE",
+      "venueCode": "ATM"
+    },
+    {
+      "code": "MAD",
+      "name": "Real Madrid",
+      "abbreviatedName": "Real",
+      "editorialName": "Real",
+      "tvCode": "RMB",
+      "isVirtual": false,
+      "clubPermanentName": "Real Madrid",
+      "clubPermanentAlias": "Real Madrid",
+      "country": { "code": "ESP", "name": "Spain" },
+      "city": "Madrid",
+      "venueCode": "ATI"
+    },
+    {
+      "code": "BAS",
+      "name": "Kosner Baskonia Vitoria-Gasteiz",
+      "abbreviatedName": "Baskonia",
+      "editorialName": "Baskonia",
+      "tvCode": "KBA",
+      "isVirtual": false,
+      "clubPermanentName": "Saski Baskonia",
+      "clubPermanentAlias": "Baskonia",
+      "country": { "code": "ESP", "name": "Spain" },
+      "city": "VITORIA-GASTEIZ",
+      "venueCode": "AUC"
+    }
+  ],
+  "total": 3
+}

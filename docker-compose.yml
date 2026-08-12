@@ -1,0 +1,82 @@
+# Development stack: backend, postgres, redis. Nothing else, until something
+# else is actually needed.
+#
+#   docker compose up -d --build
+#   docker compose exec backend alembic -c backend/alembic.ini upgrade head
+#   docker compose exec backend euroleague-ai ingest all --season E2025
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-euroleague}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-euroleague}
+      POSTGRES_DB: ${POSTGRES_DB:-euroleague}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      # Creates the separate database the integration test suite writes to, so
+      # running tests never touches development data.
+      - ./docker/init-test-db.sh:/docker-entrypoint-initdb.d/10-init-test-db.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-euroleague} -d ${POSTGRES_DB:-euroleague}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file:
+      - .env
+    environment:
+      # Compose-internal hostnames override whatever .env says, so the same
+      # .env works both inside Docker and from the host.
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-euroleague}:${POSTGRES_PASSWORD:-euroleague}@postgres:5432/${POSTGRES_DB:-euroleague}
+      TEST_DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-euroleague}:${POSTGRES_PASSWORD:-euroleague}@postgres:5432/${POSTGRES_DB:-euroleague}_test
+      REDIS_URL: redis://redis:6379/0
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    volumes:
+      # Bind-mounted for development so edits take effect without a rebuild.
+      - ./backend:/app/backend
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    command:
+      - uvicorn
+      - euroleague_ai.main:app
+      - --host
+      - "0.0.0.0"
+      - --port
+      - "8000"
+      - --reload
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8000/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+volumes:
+  postgres_data:
+  redis_data:

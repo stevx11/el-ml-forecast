@@ -1,0 +1,278 @@
+"""Data leakage guards.
+
+**The most important tests in this repository.**
+
+Leakage is the failure mode that produces excellent offline metrics and a useless
+product, and it does so silently. These tests seed a world in which post-cutoff
+rows carry deliberately extreme values, build feature snapshots at the cutoff,
+and assert the extreme values never appear. A leak changes the numbers and fails
+the test.
+
+Two distinct leaks are covered, because they have different causes and either one
+alone would be insufficient:
+
+1. **Future games** -- a game that tips off after the cutoff. Guarded by the
+   ``tip_off_utc < as_of`` predicate.
+2. **Late-arriving knowledge** -- a game that tipped off *before* the cutoff but
+   was recorded *after* it. Guarded by ``observed_at <= as_of``. This is the
+   subtle one: filtering on event time alone looks correct and leaks anyway.
+"""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime, timedelta
+
+import pytest
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from euroleague_ai.core.clock import FixedClock
+from euroleague_ai.features.player_form import build_player_form_features
+from euroleague_ai.ingestion.jobs import ingest_all
+from euroleague_ai.models.availability import PlayerStatusEvent
+from euroleague_ai.models.enums import AvailabilityStatus, EntityType, StatusSourceType
+from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats
+from euroleague_ai.models.identity import ExternalRef
+from euroleague_ai.providers.base import SeasonRef
+from euroleague_ai.providers.fixture import FixtureProvider
+from euroleague_ai.repositories.history import PlayerHistoryRepository
+from tests.conftest import requires_db
+
+pytestmark = [pytest.mark.integration, requires_db]
+
+# Marko Petrovic scored 10, 12, 14, 16 in the four games before the cutoff, and
+# 60 in game 6, which tips off a week afterwards.
+PLAYER_CODE = "011001"
+PRE_CUTOFF_POINTS = [10, 12, 14, 16]
+POST_CUTOFF_POINTS = 60
+
+# Game 5 tips off at 18:00 UTC; the default lead is 60 minutes.
+TARGET_TIP_OFF = datetime(2025, 10, 31, 18, 0, tzinfo=UTC)
+CUTOFF = TARGET_TIP_OFF - timedelta(minutes=60)
+
+
+async def _seed(session: AsyncSession, provider: FixtureProvider, season: SeasonRef) -> None:
+    await ingest_all(
+        session, provider, season, clock=FixedClock(datetime(2025, 9, 1, 12, 0, tzinfo=UTC))
+    )
+    await session.flush()
+
+
+async def _internal_id(
+    session: AsyncSession, entity_type: EntityType, external_id: str
+) -> uuid.UUID:
+    stmt = select(ExternalRef.internal_id).where(
+        ExternalRef.entity_type == entity_type, ExternalRef.external_id == external_id
+    )
+    return (await session.execute(stmt)).scalar_one()
+
+
+async def _features(session: AsyncSession, *, as_of: datetime) -> dict[str, float | None]:
+    player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+    team_id = await _internal_id(session, EntityType.TEAM, "PAR")
+    return await build_player_form_features(
+        session, player_id=player_id, team_id=team_id, as_of=as_of
+    )
+
+
+class TestFutureGamesAreInvisible:
+    async def test_pre_cutoff_average_excludes_the_future_spike(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """The 60-point game happens a week later and must not be averaged in.
+
+        Correct: mean(10, 12, 14, 16) = 13.
+        Leaked:  mean(10, 12, 14, 16, 60) = 22.4.
+        """
+        await _seed(session, fixture_provider, season)
+        features = await _features(session, as_of=CUTOFF)
+
+        expected = sum(PRE_CUTOFF_POINTS) / len(PRE_CUTOFF_POINTS)
+        assert features["season_points_mean"] == pytest.approx(expected)
+        assert features["games_played_season"] == pytest.approx(len(PRE_CUTOFF_POINTS))
+
+    async def test_the_spike_appears_once_it_is_in_the_past(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """The guard must filter by time, not simply discard the row.
+
+        Without this, a builder that always dropped the newest game would pass
+        the test above while being badly wrong.
+        """
+        await _seed(session, fixture_provider, season)
+        later = datetime(2025, 11, 30, 12, 0, tzinfo=UTC)
+        features = await _features(session, as_of=later)
+
+        all_points = [*PRE_CUTOFF_POINTS, POST_CUTOFF_POINTS]
+        assert features["season_points_mean"] == pytest.approx(sum(all_points) / len(all_points))
+        assert features["games_played_season"] == pytest.approx(len(all_points))
+
+    async def test_windowed_and_derived_features_also_respect_the_cutoff(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """Every derived statistic, not just the season mean."""
+        await _seed(session, fixture_provider, season)
+        features = await _features(session, as_of=CUTOFF)
+
+        # Newest-first, the pre-cutoff series is [16, 14, 12, 10].
+        assert features["last5_points_mean"] == pytest.approx(13.0)
+        assert features["last3_points_mean"] == pytest.approx(14.0)
+
+        # A weighted mean including a 60-point game could not be below 20.
+        ewma = features["ewma_points"]
+        assert ewma is not None and ewma < 20.0
+
+        # Steadily improving form reads positive.
+        trend = features["trend10_points"]
+        assert trend is not None and trend > 0
+
+
+class TestLateArrivingKnowledgeIsInvisible:
+    """The subtle leak: the event happened first, but we learned about it later."""
+
+    async def test_a_box_score_recorded_after_the_cutoff_is_not_visible(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """Backdate the future game, but stamp it as observed after the cutoff.
+
+        Game 6 now *tipped off* before the cutoff, so a builder filtering only on
+        ``tip_off_utc`` would happily include its 60-point line. Only the
+        ``observed_at <= as_of`` predicate keeps it out.
+        """
+        await _seed(session, fixture_provider, season)
+
+        game = (
+            await session.execute(select(Game).where(Game.game_code == 6))
+        ).scalar_one()
+        game.tip_off_utc = CUTOFF - timedelta(days=1)
+
+        # ...but our system did not learn of it until an hour after the cutoff.
+        late = CUTOFF + timedelta(hours=1)
+        game.observed_at = late
+
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+        stats = (
+            await session.execute(
+                select(PlayerGameStats)
+                .join(GameTeam, GameTeam.id == PlayerGameStats.game_team_id)
+                .where(GameTeam.game_id == game.id, PlayerGameStats.player_id == player_id)
+            )
+        ).scalar_one()
+        stats.observed_at = late
+        await session.flush()
+
+        features = await _features(session, as_of=CUTOFF)
+        expected = sum(PRE_CUTOFF_POINTS) / len(PRE_CUTOFF_POINTS)
+        assert features["season_points_mean"] == pytest.approx(expected)
+
+        # And it becomes visible once the cutoff moves past the moment we learned it.
+        after = await _features(session, as_of=late + timedelta(minutes=1))
+        assert after["season_points_mean"] != pytest.approx(expected)
+
+
+class TestAvailabilityHistory:
+    """The worked example from docs/data-model.md, asserted."""
+
+    async def test_status_resolves_to_what_was_known_at_the_time(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """10:00 OUT, 14:00 QUESTIONABLE, 18:30 AVAILABLE.
+
+        Asked at 17:00, the answer is QUESTIONABLE. The 18:30 upgrade exists in
+        the table but was not knowable, and a model predicting at 17:00 must not
+        see it.
+        """
+        await _seed(session, fixture_provider, season)
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+        day = datetime(2025, 10, 31, tzinfo=UTC)
+
+        for hour, minute, status in (
+            (10, 0, AvailabilityStatus.OUT),
+            (14, 0, AvailabilityStatus.QUESTIONABLE),
+            (18, 30, AvailabilityStatus.AVAILABLE),
+        ):
+            moment = day.replace(hour=hour, minute=minute)
+            session.add(
+                PlayerStatusEvent(
+                    id=uuid.uuid4(),
+                    player_id=player_id,
+                    status=status,
+                    source_type=StatusSourceType.PROVIDER,
+                    event_timestamp=moment,
+                    # Learned a few minutes after it happened, as in reality.
+                    observed_at=moment + timedelta(minutes=5),
+                )
+            )
+        await session.flush()
+
+        repo = PlayerHistoryRepository(session)
+        assert await repo.status_as_of(player_id, as_of=day.replace(hour=11)) is (
+            AvailabilityStatus.OUT
+        )
+        assert await repo.status_as_of(player_id, as_of=day.replace(hour=17)) is (
+            AvailabilityStatus.QUESTIONABLE
+        )
+        assert await repo.status_as_of(player_id, as_of=day.replace(hour=19)) is (
+            AvailabilityStatus.AVAILABLE
+        )
+
+    async def test_unknown_is_not_available(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """Absence of evidence is not evidence of availability."""
+        await _seed(session, fixture_provider, season)
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+        status = await PlayerHistoryRepository(session).status_as_of(player_id, as_of=CUTOFF)
+        assert status is AvailabilityStatus.UNKNOWN
+
+
+class TestTransfersDoNotRewriteHistory:
+    async def test_team_membership_is_resolved_as_of_a_date(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """Nikolic moved to Baskonia in December.
+
+        Asking which club he belonged to in November must still answer Partizan.
+        A mutable ``current_team_id`` column would answer Baskonia and quietly
+        corrupt every November feature row.
+        """
+        await _seed(session, fixture_provider, season)
+
+        player_id = await _internal_id(session, EntityType.PLAYER, "011003")
+        partizan = await _internal_id(session, EntityType.TEAM, "PAR")
+        baskonia = await _internal_id(session, EntityType.TEAM, "BAS")
+
+        repo = PlayerHistoryRepository(session)
+        november = datetime(2025, 11, 15, 12, 0, tzinfo=UTC)
+        january = datetime(2026, 1, 15, 12, 0, tzinfo=UTC)
+
+        assert await repo.team_as_of(player_id, as_of=november) == partizan
+        assert await repo.team_as_of(player_id, as_of=january) == baskonia
+
+
+class TestTheCutoffIsMandatory:
+    async def test_naive_cutoff_is_rejected(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """A naive cutoff is a bug, and must fail loudly rather than compare wrongly."""
+        await _seed(session, fixture_provider, season)
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+
+        with pytest.raises(ValueError, match="timezone-aware"):
+            await PlayerHistoryRepository(session).recent_games(
+                player_id, as_of=datetime(2025, 10, 31, 17, 0)
+            )
+
+    def test_builders_have_no_default_cutoff(self) -> None:
+        """``as_of`` must be keyword-only with no default.
+
+        A default would let a caller omit it and silently get "now", which for a
+        historical backtest means reading the entire future.
+        """
+        import inspect
+
+        signature = inspect.signature(build_player_form_features)
+        as_of = signature.parameters["as_of"]
+        assert as_of.kind is inspect.Parameter.KEYWORD_ONLY
+        assert as_of.default is inspect.Parameter.empty

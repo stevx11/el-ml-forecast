@@ -1,0 +1,518 @@
+{
+  "data": [
+    {
+      "person": {
+        "code": "011001",
+        "name": "PETROVIC, MARKO",
+        "alias": "PETROVIC, MARKO",
+        "aliasRaw": "PETROVIC, MARKO",
+        "passportName": "MARKO",
+        "passportSurname": "PETROVIC",
+        "jerseyName": "PETROVIC",
+        "abbreviatedName": "Petrovic, M.",
+        "country": {
+          "code": "SRB",
+          "name": "SRB"
+        },
+        "height": 193,
+        "weight": 88,
+        "birthDate": "1997-03-14T00:00:00",
+        "birthCountry": {
+          "code": "SRB",
+          "name": "SRB"
+        },
+        "twitterAccount": "",
+        "instagramAccount": "",
+        "facebookAccount": "",
+        "isReferee": false,
+        "images": {}
+      },
+      "type": "J",
+      "typeName": "Player",
+      "active": true,
+      "startDate": "2025-09-15T13:16:53.387",
+      "endDate": "2026-06-30T00:00:00",
+      "order": 0,
+      "dorsal": "7",
+      "dorsalRaw": "7",
+      "position": 1,
+      "positionName": "Guard",
+      "lastTeam": "PREVIOUS CLUB",
+      "externalId": 50001,
+      "images": {},
+      "club": {
+        "code": "PAR",
+        "name": "Partizan Mozzart Bet Belgrade",
+        "abbreviatedName": "Partizan",
+        "editorialName": "Partizan",
+        "tvCode": "PAR",
+        "isVirtual": false
+      },
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      }
+    },
+    {
+      "person": {
+        "code": "011002",
+        "name": "JOVANOVIC, LUKA",
+        "alias": "JOVANOVIC, LUKA",
+        "aliasRaw": "JOVANOVIC, LUKA",
+        "passportName": "LUKA",
+        "passportSurname": "JOVANOVIC",
+        "jerseyName": "JOVANOVIC",
+        "abbreviatedName": "Jovanovic, L.",
+        "country": {
+          "code": "SRB",
+          "name": "SRB"
+        },
+        "height": 205,
+        "weight": 102,
+        "birthDate": "1995-08-02T00:00:00",
+        "birthCountry": {
+          "code": "SRB",
+          "name": "SRB"
+        },
+        "twitterAccount": "",
+        "instagramAccount": "",
+        "facebookAccount": "",
+        "isReferee": false,
+        "images": {}
+      },
+      "type": "J",
+      "typeName": "Player",
+      "active": true,
+      "startDate": "2025-09-15T13:16:53.387",
+      "endDate": "2026-06-30T00:00:00",
+      "order": 0,
+      "dorsal": "13",
+      "dorsalRaw": "13",
+      "position": 2,
+      "positionName": "Forward",
+      "lastTeam": "PREVIOUS CLUB",
+      "externalId": 50002,
+      "images": {},
+      "club": {
+        "code": "PAR",
+        "name": "Partizan Mozzart Bet Belgrade",
+        "abbreviatedName": "Partizan",
+        "editorialName": "Partizan",
+        "tvCode": "PAR",
+        "isVirtual": false
+      },
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      }
+    },
+    {
+      "person": {
+        "code": "011003",
+        "name": "NIKOLIC, STEFAN",
+        "alias": "NIKOLIC, STEFAN",
+        "aliasRaw": "NIKOLIC, STEFAN",
+        "passportName": "STEFAN",
+        "passportSurname": "NIKOLIC",
+        "jerseyName": "NIKOLIC",
+        "abbreviatedName": "Nikolic, S.",
+        "country": {
+          "code": "SRB",
+          "name": "SRB"
+        },
+        "height": 211,
+        "weight": 110,
+        "birthDate": "2001-11-30T00:00:00",
+        "birthCountry": {
+          "code": "SRB",
+          "name": "SRB"
+        },
+        "twitterAccount": "",
+        "instagramAccount": "",
+        "facebookAccount": "",
+        "isReferee": false,
+        "images": {}
+      },
+      "type": "J",
+      "typeName": "Player",
+      "active": false,
+      "startDate": "2025-09-15T13:16:53.387",
+      "endDate": "2025-12-15T00:00:00",
+      "order": 0,
+      "dorsal": "21",
+      "dorsalRaw": "21",
+      "position": 3,
+      "positionName": "Center",
+      "lastTeam": "PREVIOUS CLUB",
+      "externalId": 50003,
+      "images": {},
+      "club": {
+        "code": "PAR",
+        "name": "Partizan Mozzart Bet Belgrade",
+        "abbreviatedName": "Partizan",
+        "editorialName": "Partizan",
+        "tvCode": "PAR",
+        "isVirtual": false
+      },
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      }
+    },
+    {
+      "person": {
+        "code": "012001",
+        "name": "GARCIA, PABLO",
+        "alias": "GARCIA, PABLO",
+        "aliasRaw": "GARCIA, PABLO",
+        "passportName": "PABLO",
+        "passportSurname": "GARCIA",
+        "jerseyName": "GARCIA",
+        "abbreviatedName": "Garcia, P.",
+        "country": {
+          "code": "ESP",
+          "name": "ESP"
+        },
+        "height": 190,
+        "weight": 85,
+        "birthDate": "1994-01-19T00:00:00",
+        "birthCountry": {
+          "code": "ESP",
+          "name": "ESP"
+        },
+        "twitterAccount": "",
+        "instagramAccount": "",
+        "facebookAccount": "",
+        "isReferee": false,
+        "images": {}
+      },
+      "type": "J",
+      "typeName": "Player",
+      "active": true,
+      "startDate": "2025-09-15T13:16:53.387",
+      "endDate": "2026-06-30T00:00:00",
+      "order": 0,
+      "dorsal": "5",
+      "dorsalRaw": "5",
+      "position": 1,
+      "positionName": "Guard",
+      "lastTeam": "PREVIOUS CLUB",
+      "externalId": 50001,
+      "images": {},
+      "club": {
+        "code": "MAD",
+        "name": "Real Madrid",
+        "abbreviatedName": "Real",
+        "editorialName": "Real",
+        "tvCode": "RMB",
+        "isVirtual": false
+      },
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      }
+    },
+    {
+      "person": {
+        "code": "012002",
+        "name": "MARTINEZ, DIEGO",
+        "alias": "MARTINEZ, DIEGO",
+        "aliasRaw": "MARTINEZ, DIEGO",
+        "passportName": "DIEGO",
+        "passportSurname": "MARTINEZ",
+        "jerseyName": "MARTINEZ",
+        "abbreviatedName": "Martinez, D.",
+        "country": {
+          "code": "ESP",
+          "name": "ESP"
+        },
+        "height": 202,
+        "weight": 98,
+        "birthDate": "1998-06-07T00:00:00",
+        "birthCountry": {
+          "code": "ESP",
+          "name": "ESP"
+        },
+        "twitterAccount": "",
+        "instagramAccount": "",
+        "facebookAccount": "",
+        "isReferee": false,
+        "images": {}
+      },
+      "type": "J",
+      "typeName": "Player",
+      "active": true,
+      "startDate": "2025-09-15T13:16:53.387",
+      "endDate": "2026-06-30T00:00:00",
+      "order": 0,
+      "dorsal": "11",
+      "dorsalRaw": "11",
+      "position": 2,
+      "positionName": "Forward",
+      "lastTeam": "PREVIOUS CLUB",
+      "externalId": 50002,
+      "images": {},
+      "club": {
+        "code": "MAD",
+        "name": "Real Madrid",
+        "abbreviatedName": "Real",
+        "editorialName": "Real",
+        "tvCode": "RMB",
+        "isVirtual": false
+      },
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      }
+    },
+    {
+      "person": {
+        "code": "012003",
+        "name": "LOPEZ, ANDRES",
+        "alias": "LOPEZ, ANDRES",
+        "aliasRaw": "LOPEZ, ANDRES",
+        "passportName": "ANDRES",
+        "passportSurname": "LOPEZ",
+        "jerseyName": "LOPEZ",
+        "abbreviatedName": "Lopez, A.",
+        "country": {
+          "code": "ESP",
+          "name": "ESP"
+        },
+        "height": 208,
+        "weight": 106,
+        "birthDate": "1996-09-23T00:00:00",
+        "birthCountry": {
+          "code": "ESP",
+          "name": "ESP"
+        },
+        "twitterAccount": "",
+        "instagramAccount": "",
+        "facebookAccount": "",
+        "isReferee": false,
+        "images": {}
+      },
+      "type": "J",
+      "typeName": "Player",
+      "active": true,
+      "startDate": "2025-09-15T13:16:53.387",
+      "endDate": "2026-06-30T00:00:00",
+      "order": 0,
+      "dorsal": "33",
+      "dorsalRaw": "33",
+      "position": 3,
+      "positionName": "Center",
+      "lastTeam": "PREVIOUS CLUB",
+      "externalId": 50003,
+      "images": {},
+      "club": {
+        "code": "MAD",
+        "name": "Real Madrid",
+        "abbreviatedName": "Real",
+        "editorialName": "Real",
+        "tvCode": "RMB",
+        "isVirtual": false
+      },
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      }
+    },
+    {
+      "person": {
+        "code": "013001",
+        "name": "HAKANSSON, ERIK",
+        "alias": "HAKANSSON, ERIK",
+        "aliasRaw": "HAKANSSON, ERIK",
+        "passportName": "ERIK",
+        "passportSurname": "HAKANSSON",
+        "jerseyName": "HAKANSSON",
+        "abbreviatedName": "Hakansson, E.",
+        "country": {
+          "code": "SWE",
+          "name": "SWE"
+        },
+        "height": 196,
+        "weight": 92,
+        "birthDate": "1999-04-11T00:00:00",
+        "birthCountry": {
+          "code": "SWE",
+          "name": "SWE"
+        },
+        "twitterAccount": "",
+        "instagramAccount": "",
+        "facebookAccount": "",
+        "isReferee": false,
+        "images": {}
+      },
+      "type": "J",
+      "typeName": "Player",
+      "active": true,
+      "startDate": "2025-09-15T13:16:53.387",
+      "endDate": "2026-06-30T00:00:00",
+      "order": 0,
+      "dorsal": "9",
+      "dorsalRaw": "9",
+      "position": 1,
+      "positionName": "Guard",
+      "lastTeam": "PREVIOUS CLUB",
+      "externalId": 50001,
+      "images": {},
+      "club": {
+        "code": "BAS",
+        "name": "Kosner Baskonia Vitoria-Gasteiz",
+        "abbreviatedName": "Baskonia",
+        "editorialName": "Baskonia",
+        "tvCode": "KBA",
+        "isVirtual": false
+      },
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      }
+    },
+    {
+      "person": {
+        "code": "013002",
+        "name": "DUBOIS, MATHIEU",
+        "alias": "DUBOIS, MATHIEU",
+        "aliasRaw": "DUBOIS, MATHIEU",
+        "passportName": "MATHIEU",
+        "passportSurname": "DUBOIS",
+        "jerseyName": "DUBOIS",
+        "abbreviatedName": "Dubois, M.",
+        "country": {
+          "code": "FRA",
+          "name": "FRA"
+        },
+        "height": 204,
+        "weight": 99,
+        "birthDate": "1997-12-05T00:00:00",
+        "birthCountry": {
+          "code": "FRA",
+          "name": "FRA"
+        },
+        "twitterAccount": "",
+        "instagramAccount": "",
+        "facebookAccount": "",
+        "isReferee": false,
+        "images": {}
+      },
+      "type": "J",
+      "typeName": "Player",
+      "active": true,
+      "startDate": "2025-09-15T13:16:53.387",
+      "endDate": "2026-06-30T00:00:00",
+      "order": 0,
+      "dorsal": "24",
+      "dorsalRaw": "24",
+      "position": 2,
+      "positionName": "Forward",
+      "lastTeam": "PREVIOUS CLUB",
+      "externalId": 50002,
+      "images": {},
+      "club": {
+        "code": "BAS",
+        "name": "Kosner Baskonia Vitoria-Gasteiz",
+        "abbreviatedName": "Baskonia",
+        "editorialName": "Baskonia",
+        "tvCode": "KBA",
+        "isVirtual": false
+      },
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      }
+    },
+    {
+      "person": {
+        "code": "011003",
+        "name": "NIKOLIC, STEFAN",
+        "alias": "NIKOLIC, STEFAN",
+        "aliasRaw": "NIKOLIC, STEFAN",
+        "passportName": "STEFAN",
+        "passportSurname": "NIKOLIC",
+        "jerseyName": "NIKOLIC",
+        "abbreviatedName": "Nikolic, S.",
+        "country": {
+          "code": "SRB",
+          "name": "SRB"
+        },
+        "height": 211,
+        "weight": 110,
+        "birthDate": "2001-11-30T00:00:00",
+        "birthCountry": {
+          "code": "SRB",
+          "name": "SRB"
+        },
+        "twitterAccount": "",
+        "instagramAccount": "",
+        "facebookAccount": "",
+        "isReferee": false,
+        "images": {}
+      },
+      "type": "J",
+      "typeName": "Player",
+      "active": true,
+      "startDate": "2025-12-16T09:00:00",
+      "endDate": "2026-06-30T00:00:00",
+      "order": 0,
+      "dorsal": "21",
+      "dorsalRaw": "21",
+      "position": 3,
+      "positionName": "Center",
+      "lastTeam": "PARTIZAN",
+      "externalId": 51003,
+      "images": {},
+      "club": {
+        "code": "BAS",
+        "name": "Kosner Baskonia Vitoria-Gasteiz",
+        "abbreviatedName": "Baskonia",
+        "editorialName": "Baskonia",
+        "tvCode": "KBA",
+        "isVirtual": false
+      },
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      }
+    }
+  ],
+  "total": 9
+}

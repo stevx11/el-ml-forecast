@@ -1,0 +1,553 @@
+{
+  "data": [
+    {
+      "id": 1001,
+      "identifier": "E2025_1",
+      "gameCode": 1,
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      },
+      "group": {
+        "id": 1,
+        "order": 1,
+        "name": "Regular Season",
+        "rawName": "REGULAR SEASON",
+        "phaseType": {
+          "code": "RS",
+          "alias": "RS",
+          "name": "Regular Season",
+          "isGroupPhase": true
+        }
+      },
+      "round": 1,
+      "roundAlias": "R1",
+      "roundName": "Round 1",
+      "played": true,
+      "date": "2025-10-03T18:00:00",
+      "confirmedDate": true,
+      "confirmedHour": true,
+      "localTimeZone": "Europe/Belgrade",
+      "localDate": "2025-10-03T19:00:00",
+      "utcDate": "2025-10-03T18:00:00Z",
+      "local": {
+        "club": {
+          "code": "PAR",
+          "name": "Partizan Mozzart Bet Belgrade",
+          "abbreviatedName": "Partizan",
+          "editorialName": "Partizan",
+          "tvCode": "PAR",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 84,
+        "standingsScore": 84,
+        "partials": {
+          "partials1": 21,
+          "partials2": 21,
+          "partials3": 21,
+          "partials4": 21
+        },
+        "extraPeriods": 0
+      },
+      "road": {
+        "club": {
+          "code": "MAD",
+          "name": "Real Madrid",
+          "abbreviatedName": "Real",
+          "editorialName": "Real",
+          "tvCode": "RMB",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 79,
+        "standingsScore": 79,
+        "partials": {
+          "partials1": 19,
+          "partials2": 19,
+          "partials3": 19,
+          "partials4": 22
+        },
+        "extraPeriods": 0
+      },
+      "audience": 18000,
+      "audienceConfirmed": true,
+      "venue": {
+        "name": "Stark Arena",
+        "code": "AAA",
+        "capacity": 20000,
+        "address": "",
+        "images": {},
+        "active": true
+      },
+      "notes": "",
+      "isNeutralVenue": false,
+      "gameStatus": "finished",
+      "winner": {
+        "code": "PAR",
+        "name": "Partizan Mozzart Bet Belgrade",
+        "abbreviatedName": "Partizan",
+        "editorialName": "Partizan",
+        "tvCode": "PAR",
+        "isVirtual": false,
+        "images": {}
+      }
+    },
+    {
+      "id": 1002,
+      "identifier": "E2025_2",
+      "gameCode": 2,
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      },
+      "group": {
+        "id": 1,
+        "order": 1,
+        "name": "Regular Season",
+        "rawName": "REGULAR SEASON",
+        "phaseType": {
+          "code": "RS",
+          "alias": "RS",
+          "name": "Regular Season",
+          "isGroupPhase": true
+        }
+      },
+      "round": 2,
+      "roundAlias": "R2",
+      "roundName": "Round 2",
+      "played": true,
+      "date": "2025-10-10T18:00:00",
+      "confirmedDate": true,
+      "confirmedHour": true,
+      "localTimeZone": "Europe/Madrid",
+      "localDate": "2025-10-10T19:00:00",
+      "utcDate": "2025-10-10T18:00:00Z",
+      "local": {
+        "club": {
+          "code": "BAS",
+          "name": "Kosner Baskonia Vitoria-Gasteiz",
+          "abbreviatedName": "Baskonia",
+          "editorialName": "Baskonia",
+          "tvCode": "KBA",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 71,
+        "standingsScore": 71,
+        "partials": {
+          "partials1": 17,
+          "partials2": 17,
+          "partials3": 17,
+          "partials4": 20
+        },
+        "extraPeriods": 0
+      },
+      "road": {
+        "club": {
+          "code": "PAR",
+          "name": "Partizan Mozzart Bet Belgrade",
+          "abbreviatedName": "Partizan",
+          "editorialName": "Partizan",
+          "tvCode": "PAR",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 80,
+        "standingsScore": 80,
+        "partials": {
+          "partials1": 20,
+          "partials2": 20,
+          "partials3": 20,
+          "partials4": 20
+        },
+        "extraPeriods": 0
+      },
+      "audience": 18000,
+      "audienceConfirmed": true,
+      "venue": {
+        "name": "Fernando Buesa Arena",
+        "code": "AAA",
+        "capacity": 20000,
+        "address": "",
+        "images": {},
+        "active": true
+      },
+      "notes": "",
+      "isNeutralVenue": false,
+      "gameStatus": "finished",
+      "winner": null
+    },
+    {
+      "id": 1003,
+      "identifier": "E2025_3",
+      "gameCode": 3,
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      },
+      "group": {
+        "id": 1,
+        "order": 1,
+        "name": "Regular Season",
+        "rawName": "REGULAR SEASON",
+        "phaseType": {
+          "code": "RS",
+          "alias": "RS",
+          "name": "Regular Season",
+          "isGroupPhase": true
+        }
+      },
+      "round": 3,
+      "roundAlias": "R3",
+      "roundName": "Round 3",
+      "played": true,
+      "date": "2025-10-17T18:00:00",
+      "confirmedDate": true,
+      "confirmedHour": true,
+      "localTimeZone": "Europe/Belgrade",
+      "localDate": "2025-10-17T19:00:00",
+      "utcDate": "2025-10-17T18:00:00Z",
+      "local": {
+        "club": {
+          "code": "PAR",
+          "name": "Partizan Mozzart Bet Belgrade",
+          "abbreviatedName": "Partizan",
+          "editorialName": "Partizan",
+          "tvCode": "PAR",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 88,
+        "standingsScore": 88,
+        "partials": {
+          "partials1": 22,
+          "partials2": 22,
+          "partials3": 22,
+          "partials4": 22
+        },
+        "extraPeriods": 0
+      },
+      "road": {
+        "club": {
+          "code": "BAS",
+          "name": "Kosner Baskonia Vitoria-Gasteiz",
+          "abbreviatedName": "Baskonia",
+          "editorialName": "Baskonia",
+          "tvCode": "KBA",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 75,
+        "standingsScore": 75,
+        "partials": {
+          "partials1": 18,
+          "partials2": 18,
+          "partials3": 18,
+          "partials4": 21
+        },
+        "extraPeriods": 0
+      },
+      "audience": 18000,
+      "audienceConfirmed": true,
+      "venue": {
+        "name": "Stark Arena",
+        "code": "AAA",
+        "capacity": 20000,
+        "address": "",
+        "images": {},
+        "active": true
+      },
+      "notes": "",
+      "isNeutralVenue": false,
+      "gameStatus": "finished",
+      "winner": {
+        "code": "PAR",
+        "name": "Partizan Mozzart Bet Belgrade",
+        "abbreviatedName": "Partizan",
+        "editorialName": "Partizan",
+        "tvCode": "PAR",
+        "isVirtual": false,
+        "images": {}
+      }
+    },
+    {
+      "id": 1004,
+      "identifier": "E2025_4",
+      "gameCode": 4,
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      },
+      "group": {
+        "id": 1,
+        "order": 1,
+        "name": "Regular Season",
+        "rawName": "REGULAR SEASON",
+        "phaseType": {
+          "code": "RS",
+          "alias": "RS",
+          "name": "Regular Season",
+          "isGroupPhase": true
+        }
+      },
+      "round": 4,
+      "roundAlias": "R4",
+      "roundName": "Round 4",
+      "played": true,
+      "date": "2025-10-24T18:00:00",
+      "confirmedDate": true,
+      "confirmedHour": true,
+      "localTimeZone": "Europe/Madrid",
+      "localDate": "2025-10-24T19:00:00",
+      "utcDate": "2025-10-24T18:00:00Z",
+      "local": {
+        "club": {
+          "code": "MAD",
+          "name": "Real Madrid",
+          "abbreviatedName": "Real",
+          "editorialName": "Real",
+          "tvCode": "RMB",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 77,
+        "standingsScore": 77,
+        "partials": {
+          "partials1": 19,
+          "partials2": 19,
+          "partials3": 19,
+          "partials4": 20
+        },
+        "extraPeriods": 0
+      },
+      "road": {
+        "club": {
+          "code": "PAR",
+          "name": "Partizan Mozzart Bet Belgrade",
+          "abbreviatedName": "Partizan",
+          "editorialName": "Partizan",
+          "tvCode": "PAR",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 82,
+        "standingsScore": 82,
+        "partials": {
+          "partials1": 20,
+          "partials2": 20,
+          "partials3": 20,
+          "partials4": 22
+        },
+        "extraPeriods": 0
+      },
+      "audience": 18000,
+      "audienceConfirmed": true,
+      "venue": {
+        "name": "Movistar Arena",
+        "code": "AAA",
+        "capacity": 20000,
+        "address": "",
+        "images": {},
+        "active": true
+      },
+      "notes": "",
+      "isNeutralVenue": false,
+      "gameStatus": "finished",
+      "winner": null
+    },
+    {
+      "id": 1005,
+      "identifier": "E2025_5",
+      "gameCode": 5,
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      },
+      "group": {
+        "id": 1,
+        "order": 1,
+        "name": "Regular Season",
+        "rawName": "REGULAR SEASON",
+        "phaseType": {
+          "code": "RS",
+          "alias": "RS",
+          "name": "Regular Season",
+          "isGroupPhase": true
+        }
+      },
+      "round": 5,
+      "roundAlias": "R5",
+      "roundName": "Round 5",
+      "played": false,
+      "date": "2025-10-31T18:00:00",
+      "confirmedDate": true,
+      "confirmedHour": true,
+      "localTimeZone": "Europe/Belgrade",
+      "localDate": "2025-10-31T19:00:00",
+      "utcDate": "2025-10-31T18:00:00Z",
+      "local": {
+        "club": {
+          "code": "PAR",
+          "name": "Partizan Mozzart Bet Belgrade",
+          "abbreviatedName": "Partizan",
+          "editorialName": "Partizan",
+          "tvCode": "PAR",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": null,
+        "standingsScore": null,
+        "partials": null,
+        "extraPeriods": 0
+      },
+      "road": {
+        "club": {
+          "code": "MAD",
+          "name": "Real Madrid",
+          "abbreviatedName": "Real",
+          "editorialName": "Real",
+          "tvCode": "RMB",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": null,
+        "standingsScore": null,
+        "partials": null,
+        "extraPeriods": 0
+      },
+      "audience": null,
+      "audienceConfirmed": false,
+      "venue": {
+        "name": "Stark Arena",
+        "code": "AAA",
+        "capacity": 20000,
+        "address": "",
+        "images": {},
+        "active": true
+      },
+      "notes": "",
+      "isNeutralVenue": false,
+      "gameStatus": "scheduled",
+      "winner": null
+    },
+    {
+      "id": 1006,
+      "identifier": "E2025_6",
+      "gameCode": 6,
+      "season": {
+        "name": "EuroLeague 2025-26",
+        "code": "E2025",
+        "alias": "2025-26",
+        "competitionCode": "E",
+        "year": 2025,
+        "startDate": "2025-07-01T00:00:00"
+      },
+      "group": {
+        "id": 1,
+        "order": 1,
+        "name": "Regular Season",
+        "rawName": "REGULAR SEASON",
+        "phaseType": {
+          "code": "RS",
+          "alias": "RS",
+          "name": "Regular Season",
+          "isGroupPhase": true
+        }
+      },
+      "round": 6,
+      "roundAlias": "R6",
+      "roundName": "Round 6",
+      "played": true,
+      "date": "2025-11-07T18:00:00",
+      "confirmedDate": true,
+      "confirmedHour": true,
+      "localTimeZone": "Europe/Belgrade",
+      "localDate": "2025-11-07T19:00:00",
+      "utcDate": "2025-11-07T18:00:00Z",
+      "local": {
+        "club": {
+          "code": "PAR",
+          "name": "Partizan Mozzart Bet Belgrade",
+          "abbreviatedName": "Partizan",
+          "editorialName": "Partizan",
+          "tvCode": "PAR",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 99,
+        "standingsScore": 99,
+        "partials": {
+          "partials1": 24,
+          "partials2": 24,
+          "partials3": 24,
+          "partials4": 27
+        },
+        "extraPeriods": 0
+      },
+      "road": {
+        "club": {
+          "code": "BAS",
+          "name": "Kosner Baskonia Vitoria-Gasteiz",
+          "abbreviatedName": "Baskonia",
+          "editorialName": "Baskonia",
+          "tvCode": "KBA",
+          "isVirtual": false,
+          "images": {}
+        },
+        "score": 70,
+        "standingsScore": 70,
+        "partials": {
+          "partials1": 17,
+          "partials2": 17,
+          "partials3": 17,
+          "partials4": 19
+        },
+        "extraPeriods": 0
+      },
+      "audience": 18000,
+      "audienceConfirmed": true,
+      "venue": {
+        "name": "Stark Arena",
+        "code": "AAA",
+        "capacity": 20000,
+        "address": "",
+        "images": {},
+        "active": true
+      },
+      "notes": "",
+      "isNeutralVenue": false,
+      "gameStatus": "finished",
+      "winner": {
+        "code": "PAR",
+        "name": "Partizan Mozzart Bet Belgrade",
+        "abbreviatedName": "Partizan",
+        "editorialName": "Partizan",
+        "tvCode": "PAR",
+        "isVirtual": false,
+        "images": {}
+      }
+    }
+  ],
+  "total": 6
+}

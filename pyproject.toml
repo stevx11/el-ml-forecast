@@ -1,0 +1,124 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "euroleague-ai"
+version = "0.1.0"
+description = "EuroLeague basketball intelligence and player-performance prediction platform"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic>=2.9",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "asyncpg>=0.30",
+    "alembic>=1.14",
+    "redis>=5.2",
+    "httpx>=0.28",
+    "tenacity>=9.0",
+    "typer>=0.15",
+]
+
+[project.optional-dependencies]
+# ML dependencies are an extra so the API image stays small. Training runs where
+# the heavy wheels are actually needed; the serving path only loads artifacts.
+ml = [
+    "numpy>=2.1",
+    "pandas>=2.2",
+    "polars>=1.17",
+    "scikit-learn>=1.6",
+    "lightgbm>=4.5",
+    "xgboost>=2.1",
+]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "pytest-cov>=6.0",
+    "ruff>=0.8",
+    "mypy>=1.13",
+    "asgi-lifespan>=2.1",
+]
+
+[project.scripts]
+euroleague-ai = "euroleague_ai.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["backend/src/euroleague_ai"]
+
+# ---------------------------------------------------------------------------
+# Ruff
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["backend/src", "backend/tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle
+    "W",    # pycodestyle warnings
+    "F",    # pyflakes
+    "I",    # isort
+    "N",    # pep8-naming
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "C4",   # comprehensions
+    "DTZ",  # flake8-datetimez -- naive datetimes are a leakage hazard here
+    "SIM",  # simplify
+    "TCH",  # type-checking imports
+    "RUF",
+]
+ignore = [
+    "B008",  # FastAPI Depends() in defaults is the documented idiom
+]
+
+[tool.ruff.lint.per-file-ignores]
+"backend/tests/*" = ["S101"]
+"backend/migrations/versions/*" = ["E501", "N999"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["euroleague_ai"]
+
+# ---------------------------------------------------------------------------
+# mypy
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "backend/src"
+packages = ["euroleague_ai"]
+strict = true
+warn_unreachable = true
+plugins = ["pydantic.mypy"]
+
+[[tool.mypy.overrides]]
+module = ["backend.migrations.*", "alembic.*"]
+ignore_errors = true
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["backend/tests"]
+# "backend" as well as "backend/src" so tests can `from tests.conftest import ...`.
+pythonpath = ["backend/src", "backend"]
+asyncio_mode = "auto"
+# Fixtures and tests must share one event loop. The engine and its asyncpg
+# connections are session-scoped, and a connection created on one loop cannot be
+# awaited on another -- mismatched scopes surface as opaque "attached to a
+# different loop" errors deep inside the driver.
+asyncio_default_fixture_loop_scope = "session"
+asyncio_default_test_loop_scope = "session"
+addopts = "-ra --strict-markers"
+markers = [
+    "integration: requires a live PostgreSQL instance (set TEST_DATABASE_URL)",
+]
+
+[tool.coverage.run]
+source = ["backend/src/euroleague_ai"]
+branch = true
