@@ -10,6 +10,11 @@ from euroleague_ai.schemas.competition import LeagueOut, SeasonOut, TeamOut
 from euroleague_ai.schemas.game import BoxScoreLineOut, GameDetailOut, GameOut
 from euroleague_ai.schemas.health import HealthOut, ReadinessOut
 from euroleague_ai.schemas.player import PlayerGameLogOut, PlayerOut
+from euroleague_ai.schemas.prediction import (
+    PlayerProjectionOut,
+    PredictionOut,
+    ProjectionsOut,
+)
 
 __all__ = [
     "BoxScoreLineOut",
@@ -21,6 +26,9 @@ __all__ = [
     "PageMeta",
     "PlayerGameLogOut",
     "PlayerOut",
+    "PlayerProjectionOut",
+    "PredictionOut",
+    "ProjectionsOut",
     "ReadinessOut",
     "SeasonOut",
     "TeamOut",

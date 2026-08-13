@@ -12,6 +12,7 @@ unparseable rows are skipped rather than raising. A single malformed record in a
 
 from __future__ import annotations
 
+from datetime import UTC, date, datetime, time
 from typing import Any
 
 from euroleague_ai.models.enums import GameStatus, PlayerPosition
@@ -194,6 +195,74 @@ def map_player_stint(payload: dict[str, Any]) -> PlayerStintDTO | None:
         is_active=bool(payload.get("active", True)),
         effective_from=effective_from,
         effective_until=parse_datetime(_text(payload.get("endDate"))),
+    )
+
+
+def map_club_roster_entry(
+    payload: dict[str, Any],
+    *,
+    club_code: str,
+    season_start: date,
+    season_end: date,
+) -> PlayerStintDTO | None:
+    """Map one entry of ``/clubs/{code}/people`` -- the authoritative roster.
+
+    **This endpoint, not the season-wide ``/people``.** The season-wide feed
+    returns a partial list of recently-created registrations, not a squad: for
+    E2026 it held 204 rows against 20 full rosters. The club-scoped endpoint is
+    what the official site renders, and it returns the real squad.
+
+    Two shape differences from the season feed:
+
+    * Coaches are included as ``type: "E"`` and must be filtered out here.
+    * ``startDate`` / ``endDate`` are generic contract windows (2025-08-13 to
+      2027-08-13) rather than registration dates, so they span neighbouring
+      seasons. Left as-is they would make a player simultaneously registered in
+      two seasons, which is exactly the ambiguity transfer resolution cannot
+      tolerate. They are therefore clamped to the season's own window.
+    """
+    if payload.get("type") != "J":
+        return None  # coach or staff
+
+    person = payload.get("person")
+    if not isinstance(person, dict):
+        return None
+
+    external_id = normalise_person_code(_text(person.get("code")))
+    full_name, last_name, first_name = _split_person_name(person)
+    if not external_id or not full_name:
+        return None
+
+    season_from = datetime.combine(season_start, time.min, tzinfo=UTC)
+    season_until = datetime.combine(season_end, time.min, tzinfo=UTC)
+
+    raw_from = parse_datetime(_text(payload.get("startDate")))
+    raw_until = parse_datetime(_text(payload.get("endDate")))
+
+    effective_from = max(raw_from, season_from) if raw_from else season_from
+    effective_until = min(raw_until, season_until) if raw_until else season_until
+
+    if effective_until <= effective_from:
+        # A contract window that does not overlap the season at all.
+        return None
+
+    return PlayerStintDTO(
+        external_id=external_id,
+        full_name=full_name,
+        last_name=last_name,
+        first_name=first_name,
+        birth_date=parse_date(_text(person.get("birthDate"))),
+        country_code=_text(_dig(person, "country", "code")),
+        birth_country_code=_text(_dig(person, "birthCountry", "code")),
+        height_cm=parse_optional_int(person.get("height")),
+        weight_kg=parse_optional_int(person.get("weight")),
+        position=map_position(payload),
+        team_external_id=_text(_dig(payload, "club", "code")) or club_code,
+        jersey_number=_text(payload.get("dorsal")),
+        previous_team_name=_text(payload.get("lastTeam")),
+        is_active=bool(payload.get("active", True)),
+        effective_from=effective_from,
+        effective_until=effective_until,
     )
 
 

@@ -25,6 +25,13 @@ from euroleague_ai.ml.dataset import (
     describe_rows,
     load_training_rows,
 )
+from euroleague_ai.ml.inference import (
+    LoadedModel,
+    candidate_players,
+    load_active_models,
+    predict_upcoming,
+)
+from euroleague_ai.ml.matrix import derive_feature_names, features_to_matrix, to_matrix
 from euroleague_ai.ml.evaluation import (
     Fold,
     Metrics,
@@ -54,5 +61,12 @@ __all__ = [
     "describe_rows",
     "load_training_rows",
     "stratified_metrics",
+    "LoadedModel",
+    "candidate_players",
+    "derive_feature_names",
+    "features_to_matrix",
+    "load_active_models",
+    "predict_upcoming",
+    "to_matrix",
     "walk_forward_folds",
 ]

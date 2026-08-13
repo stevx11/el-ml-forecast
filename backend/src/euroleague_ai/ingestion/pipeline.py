@@ -21,7 +21,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -41,6 +41,11 @@ from euroleague_ai.providers.base import (
 )
 from euroleague_ai.providers.parsing import estimate_pace, estimate_possessions
 from euroleague_ai.ingestion.identity import IdentityResolver
+from euroleague_ai.ingestion.knowability import (
+    box_score_observed_at,
+    fixture_observed_at,
+    stint_observed_at,
+)
 
 logger = get_logger(__name__)
 
@@ -178,13 +183,37 @@ class IngestionPipeline:
     # -- players -----------------------------------------------------------
 
     async def upsert_player_stints(
-        self, stints: list[PlayerStintDTO], season: Season
+        self,
+        stints: list[PlayerStintDTO],
+        season: Season,
+        *,
+        reconcile: bool = True,
     ) -> IngestionResult:
-        """Upsert players and their roster intervals."""
+        """Upsert players and their roster intervals.
+
+        Args:
+            reconcile: Remove stints for this season that are absent from
+                ``stints``. **On by default, and it matters.** Upserting alone
+                cannot correct a roster: it adds and updates but never removes,
+                so a registration written by an earlier (or wrong) source
+                survives forever. That is not a hypothetical -- rosters ingested
+                from the season-wide ``/people`` feed left players at clubs they
+                had left, and because those stale rows carried a *later*
+                ``effective_from`` than the corrected ones, transfer resolution
+                actively preferred them.
+
+                A stint that should not exist is an error, not history, so it is
+                deleted rather than closed. Genuine history -- a mid-season
+                transfer -- survives, because the club endpoint lists the player
+                under both clubs for that season.
+        """
         result = IngestionResult(rows_read=len(stints))
         await self._resolver.preload(EntityType.PLAYER)
         await self._resolver.preload(EntityType.TEAM)
         observed_at = self._clock.now()
+
+        # (player, team) pairs the authoritative roster actually contains.
+        seen: set[tuple[uuid.UUID, uuid.UUID]] = set()
 
         for dto in stints:
             player_id, _ = await self._resolver.resolve(EntityType.PLAYER, dto.external_id)
@@ -232,11 +261,58 @@ class IngestionPipeline:
                 result.skipped += 1
                 continue
 
-            written = await self._upsert_stint(dto, player_id, team_id, season, observed_at)
+            written = await self._upsert_stint(
+                dto, player_id, team_id, season,
+                stint_observed_at(dto.effective_from, observed_at),
+            )
             result.rows_written += written
+            seen.add((player_id, team_id))
 
         await self._session.flush()
+
+        if reconcile and seen:
+            removed = await self._remove_stale_stints(season, seen)
+            if removed:
+                result.details["stale_stints_removed"] = removed
+                logger.warning(
+                    "removed stale roster registrations",
+                    extra={"season": season.code, "removed": removed},
+                )
+
         return result
+
+    async def _remove_stale_stints(
+        self, season: Season, seen: set[tuple[uuid.UUID, uuid.UUID]]
+    ) -> int:
+        """Delete this season's stints that the authoritative roster does not list.
+
+        Compared on ``(player, team)`` rather than on the stint id, so a corrected
+        interval for a pair that is still valid updates in place while a pair that
+        no longer exists is dropped.
+        """
+        existing = (
+            await self._session.execute(
+                select(
+                    PlayerTeamStint.id,
+                    PlayerTeamStint.player_id,
+                    PlayerTeamStint.team_id,
+                ).where(PlayerTeamStint.season_id == season.id)
+            )
+        ).all()
+
+        stale = [
+            stint_id
+            for stint_id, player_id, team_id in existing
+            if (player_id, team_id) not in seen
+        ]
+        if not stale:
+            return 0
+
+        await self._session.execute(
+            delete(PlayerTeamStint).where(PlayerTeamStint.id.in_(stale))
+        )
+        await self._session.flush()
+        return len(stale)
 
     async def _upsert_stint(
         self,
@@ -316,6 +392,11 @@ class IngestionPipeline:
             game_key = f"{season.code}:{dto.game_code}"
             game_id, _ = await self._resolver.resolve(EntityType.GAME, game_key)
 
+            # Not the ingest clock: a fixture backfilled from 2018 was knowable
+            # in 2018, and stamping it with today would hide it from every
+            # historical feature query. See ingestion/knowability.py.
+            game_observed_at = fixture_observed_at(dto.tip_off_utc, observed_at)
+
             await self._session.execute(
                 pg_insert(Game)
                 .values(
@@ -337,7 +418,7 @@ class IngestionPipeline:
                     is_neutral_venue=dto.is_neutral_venue,
                     venue_name=dto.venue_name,
                     attendance=dto.attendance,
-                    observed_at=observed_at,
+                    observed_at=game_observed_at,
                 )
                 .on_conflict_do_update(
                     index_elements=["season_id", "game_code"],
@@ -352,7 +433,7 @@ class IngestionPipeline:
                         "away_score": dto.away_score,
                         "venue_name": dto.venue_name,
                         "attendance": dto.attendance,
-                        "observed_at": observed_at,
+                        "observed_at": game_observed_at,
                     },
                 )
             )
@@ -397,15 +478,27 @@ class IngestionPipeline:
             result.skipped += 1
             return result
 
+        # A box score becomes public when the game ends, not when our ingest
+        # happened to run. Stamping a 2018 game with today's clock hides it from
+        # every historical feature query. See ingestion/knowability.py.
+        tip_off = (
+            await self._session.execute(select(Game.tip_off_utc).where(Game.id == game_id))
+        ).scalar_one()
+        observed_at = box_score_observed_at(tip_off, self._clock.now())
+
         for side, team_stats in ((TeamSide.HOME, stats.home), (TeamSide.AWAY, stats.away)):
-            written = await self._upsert_side_stats(game_id, side, team_stats)
+            written = await self._upsert_side_stats(game_id, side, team_stats, observed_at)
             result.rows_written += written
 
         await self._session.flush()
         return result
 
     async def _upsert_side_stats(
-        self, game_id: uuid.UUID, side: TeamSide, team_stats: TeamStatsDTO
+        self,
+        game_id: uuid.UUID,
+        side: TeamSide,
+        team_stats: TeamStatsDTO,
+        observed_at: datetime,
     ) -> int:
         game_team = (
             await self._session.execute(
@@ -415,8 +508,6 @@ class IngestionPipeline:
         if game_team is None:
             logger.warning("no game_team row", extra={"game": str(game_id), "side": side})
             return 0
-
-        observed_at = self._clock.now()
 
         if team_stats.coach_external_id and team_stats.coach_name:
             game_team.coach_id = await self._ensure_coach(

@@ -3,10 +3,11 @@
 # Two stages so the runtime image carries no build toolchain and no compilers.
 FROM python:3.12-slim AS builder
 
-# Dev tooling (pytest, ruff, mypy) is installed by default because this image
-# is the development environment. Build with --build-arg INSTALL_EXTRAS="" for
-# a lean production image.
-ARG INSTALL_EXTRAS="[dev]"
+# Dev tooling and the ML stack are installed by default: this image is both
+# the development environment and where training runs. LightGBM needs libgomp
+# at runtime, installed in the runtime stage below. Build with
+# --build-arg INSTALL_EXTRAS="" for a lean serving image.
+ARG INSTALL_EXTRAS="[dev,ml]"
 
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 \
     PIP_NO_CACHE_DIR=1 \
@@ -37,7 +38,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 # libpq is needed at runtime by asyncpg's fallback paths and by psql-style tooling.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libpq5 curl \
+    && apt-get install -y --no-install-recommends libpq5 curl libgomp1 \
     && rm -rf /var/lib/apt/lists/* \
     && useradd --create-home --uid 10001 appuser
 

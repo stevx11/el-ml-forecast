@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import date
 from types import TracebackType
 from typing import Any
 
@@ -37,9 +38,9 @@ from euroleague_ai.providers.base import (
     TeamDTO,
 )
 from euroleague_ai.providers.mapping import (
+    map_club_roster_entry,
     map_game,
     map_game_stats,
-    map_player_stint,
     map_team,
 )
 
@@ -405,15 +406,59 @@ class EuroLeagueProvider:
         return teams
 
     async def fetch_players(self, season: SeasonRef) -> list[PlayerStintDTO]:
-        # personType=J selects players; coaches and referees use other codes and
-        # are ingested separately where needed.
-        rows = await self._get_paginated(
-            self._season_path(season, "/people"), {"personType": "J"}
-        )
-        stints = [stint for row in rows if (stint := map_player_stint(row)) is not None]
+        """Fetch every club's roster, club by club.
+
+        **Not the season-wide ``/people`` endpoint.** That returns a partial feed
+        of recently-created registrations -- 204 rows against 20 full squads for
+        E2026 -- and is not a roster. Building team membership on it produced
+        players assigned to clubs they had left. ``/clubs/{code}/people`` is what
+        the official site renders and returns the actual squad.
+
+        One request per club, so twenty for a EuroLeague season. That is more
+        requests than the single season-wide call, but correctness is not
+        negotiable and the rate limiter handles the volume.
+        """
+        # A season runs 1 July to 30 June. Used to clamp the generic contract
+        # windows the club endpoint returns, which otherwise span two seasons.
+        season_start = date(season.start_year, 7, 1)
+        season_end = date(season.start_year + 1, 6, 30)
+
+        teams = await self.fetch_teams(season)
+        stints: list[PlayerStintDTO] = []
+        raw_count = 0
+
+        for team in teams:
+            rows = await self._get(
+                self._season_path(season, f"/clubs/{team.code}/people")
+            )
+            # This endpoint returns a bare array, not the usual {"data": [...]}.
+            if isinstance(rows, dict):
+                rows = rows.get("data")
+            if not isinstance(rows, list):
+                logger.warning("no roster returned", extra={"club": team.code})
+                continue
+
+            raw_count += len(rows)
+            for row in rows:
+                if not isinstance(row, dict):
+                    continue
+                stint = map_club_roster_entry(
+                    row,
+                    club_code=team.code,
+                    season_start=season_start,
+                    season_end=season_end,
+                )
+                if stint is not None:
+                    stints.append(stint)
+
         logger.info(
-            "fetched player registrations",
-            extra={"season": season.season_code, "count": len(stints), "raw": len(rows)},
+            "fetched club rosters",
+            extra={
+                "season": season.season_code,
+                "clubs": len(teams),
+                "players": len(stints),
+                "raw": raw_count,
+            },
         )
         return stints
 

@@ -16,6 +16,7 @@ import json
 import logging
 import sys
 import uuid
+from collections.abc import MutableMapping
 from contextvars import ContextVar
 from typing import Any
 
@@ -116,6 +117,32 @@ def configure_logging(*, level: str = "INFO", fmt: str = "console") -> None:
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
-def get_logger(name: str) -> logging.Logger:
-    """Return a logger. Thin wrapper so call sites do not import ``logging``."""
-    return logging.getLogger(name)
+class SafeExtraLogger(logging.LoggerAdapter):
+    """Logger that cannot be crashed by a colliding ``extra`` key.
+
+    ``logging`` raises ``KeyError: "Attempt to overwrite 'name' in LogRecord"``
+    when ``extra`` contains a key the ``LogRecord`` already owns -- ``name``,
+    ``module``, ``filename``, ``args`` and a dozen others. The names that collide
+    are exactly the ones structured logging wants most, so the trap is easy to
+    walk into: ``logger.info("registered model", extra={"name": name})`` looks
+    obviously correct and takes down the caller at runtime.
+
+    Colliding keys are suffixed with an underscore rather than dropped, so the
+    value still reaches the log instead of vanishing silently.
+    """
+
+    def process(
+        self, msg: str, kwargs: MutableMapping[str, Any]
+    ) -> tuple[str, MutableMapping[str, Any]]:
+        extra = kwargs.get("extra")
+        if extra:
+            kwargs["extra"] = {
+                (f"{key}_" if key in _RESERVED_ATTRS else key): value
+                for key, value in extra.items()
+            }
+        return msg, kwargs
+
+
+def get_logger(name: str) -> SafeExtraLogger:
+    """Return a logger whose ``extra`` payloads are collision-safe."""
+    return SafeExtraLogger(logging.getLogger(name), {})

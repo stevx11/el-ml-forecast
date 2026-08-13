@@ -1,0 +1,171 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A new push supersedes an in-flight run on the same ref. Nobody needs the
+# results of a commit that has already been replaced.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHON_VERSION: "3.12"
+
+jobs:
+  test:
+    name: tests
+    runs-on: ubuntu-latest
+
+    # A real PostgreSQL, not SQLite. The schema uses native enums, JSONB and
+    # timestamptz, and the leakage guards depend on Postgres time semantics --
+    # testing against anything else would prove nothing.
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: euroleague
+          POSTGRES_PASSWORD: euroleague
+          POSTGRES_DB: euroleague
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U euroleague"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        # The [ml] extra is deliberately omitted. No test imports LightGBM,
+        # numpy or pandas -- the ML modules import them lazily inside functions
+        # precisely so the baseline and evaluation code runs without them. Adding
+        # ~200MB of wheels would slow every run for nothing. If a training test
+        # is ever added, change this to ".[dev,ml]".
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Create the test database
+        # The service container creates POSTGRES_DB only. The suite writes to a
+        # separate database so a test run can never touch development data.
+        run: |
+          PGPASSWORD=euroleague psql -h localhost -U euroleague -d euroleague \
+            -c "CREATE DATABASE euroleague_test;"
+
+      - name: Verify the suite can see the test database
+        # The integration tests skip -- rather than fail -- when
+        # TEST_DATABASE_URL is unset, so that `pytest` works on a laptop with no
+        # Docker. In CI that safety valve is a hazard: a misconfigured URL would
+        # skip every leakage guard and report a cheerful green tick. Asking
+        # conftest the same question it asks itself costs a second and closes
+        # that hole.
+        env:
+          TEST_DATABASE_URL: postgresql+asyncpg://euroleague:euroleague@localhost:5432/euroleague_test
+        run: |
+          python - <<'PY'
+          import sys
+          sys.path.insert(0, "backend")
+          from tests.conftest import _test_database_url
+
+          url = _test_database_url()
+          if not url:
+              sys.exit("integration tests would silently skip: no test database resolved")
+          print(f"test database resolved: ...@{url.rsplit('@', 1)[-1]}")
+          PY
+
+      - name: Run tests
+        env:
+          DATABASE_URL: postgresql+asyncpg://euroleague:euroleague@localhost:5432/euroleague
+          TEST_DATABASE_URL: postgresql+asyncpg://euroleague:euroleague@localhost:5432/euroleague_test
+          # The suite is noisy at INFO; keep the CI log readable.
+          LOG_LEVEL: WARNING
+        run: pytest -q --cov --cov-report=term-missing:skip-covered
+
+  quality:
+    name: lint and types
+    runs-on: ubuntu-latest
+    # Not blocking yet. ruff and mypy have never been run against this codebase
+    # (backlog item 08), so they will report real findings on the first run.
+    # Making them required today would mean merging into a permanently red CI,
+    # which trains people to ignore it. Flip continue-on-error off once item 08
+    # has cleared the backlog.
+    continue-on-error: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Ruff
+        run: ruff check backend --output-format=github
+
+      - name: Ruff format
+        run: ruff format --check backend
+
+      - name: Mypy
+        run: mypy
+
+  migrations:
+    name: migrations round-trip
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: euroleague
+          POSTGRES_PASSWORD: euroleague
+          POSTGRES_DB: euroleague
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U euroleague"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Upgrade, downgrade, upgrade
+        # A migration that only goes forwards is one you cannot back out of
+        # during an incident. The suite applies `upgrade head`; this is the only
+        # place `downgrade base` is exercised.
+        env:
+          DATABASE_URL: postgresql+asyncpg://euroleague:euroleague@localhost:5432/euroleague
+        run: |
+          alembic -c backend/alembic.ini upgrade head
+          alembic -c backend/alembic.ini downgrade base
+          alembic -c backend/alembic.ini upgrade head

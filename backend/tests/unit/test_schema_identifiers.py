@@ -102,7 +102,14 @@ class TestMigrationIdentifiers:
     """
 
     @pytest.fixture(scope="class")
-    def migration_sources(self) -> str:
+    @staticmethod
+    def migration_sources() -> str:
+        """All migration sources concatenated.
+
+        A staticmethod because pytest deprecates class-scoped fixtures defined as
+        instance methods -- each test gets a fresh instance while the fixture runs
+        once, so anything set on ``self`` would silently vanish.
+        """
         return "\n".join(
             path.read_text(encoding="utf-8") for path in MIGRATIONS_DIR.glob("*.py")
         )

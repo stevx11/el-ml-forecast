@@ -1,5 +1,7 @@
 # EuroLeague AI
 
+[![CI](https://github.com/stevx11/el-ml-predictor/actions/workflows/ci.yml/badge.svg)](https://github.com/stevx11/el-ml-predictor/actions/workflows/ci.yml)
+
 A pre-game basketball intelligence and player-performance prediction platform for
 EuroLeague.
 
@@ -302,8 +304,31 @@ the suite rather than production.
 ```bash
 make lint        # ruff
 make typecheck   # mypy --strict
-make check       # lint + typecheck + test — what CI would run
+make check       # lint + typecheck + test — what CI runs
 ```
+
+### CI
+
+`.github/workflows/ci.yml` runs on every push to `main` and every pull request:
+
+| Job | What it proves | Blocking |
+|---|---|---|
+| `tests` | Full suite against a real PostgreSQL 16 service | Yes |
+| `migrations round-trip` | `upgrade head` → `downgrade base` → `upgrade head` | Yes |
+| `lint and types` | ruff and mypy | **Not yet** |
+
+Two details worth knowing.
+
+The test job **fails if the integration tests skip**. They skip rather than fail
+when `TEST_DATABASE_URL` is unset, so the suite still runs on a laptop with no
+Docker — but in CI that safety valve would hide every leakage guard behind a
+green tick. A step asks `conftest` the same question it asks itself, and fails if
+the answer is "no database".
+
+The quality job is `continue-on-error` because ruff and mypy have never been run
+against this codebase and will report real findings on first contact. Merging
+into a permanently red CI teaches people to ignore it. Once those findings are
+cleared, drop the flag and make it blocking.
 
 ---
 

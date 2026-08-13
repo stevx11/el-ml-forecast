@@ -10,7 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from euroleague_ai.core.clock import FixedClock
-from euroleague_ai.features.player_form import FEATURE_SET_VERSION
+from euroleague_ai.features.registry import FEATURE_SET_VERSION
 from euroleague_ai.features.snapshot import (
     build_and_store_player_snapshot,
     default_prediction_timestamp,

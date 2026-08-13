@@ -103,3 +103,55 @@ class TestClock:
     def test_ensure_utc_converts_other_offsets(self) -> None:
         belgrade = datetime(2025, 1, 1, 13, 0, tzinfo=timezone(timedelta(hours=1)))
         assert ensure_utc(belgrade) == datetime(2025, 1, 1, 12, 0, tzinfo=UTC)
+
+
+class TestLoggingExtras:
+    """Regression: a colliding ``extra`` key crashed a completed training run.
+
+    ``logger.info("registered model", extra={"name": name})`` raises
+    ``KeyError: "Attempt to overwrite 'name' in LogRecord"``. The model had
+    already trained and passed its gate; the crash happened while reporting it,
+    and rolled the registration back.
+    """
+
+    def test_reserved_key_does_not_raise(self) -> None:
+        import logging as stdlib_logging
+
+        from euroleague_ai.core.logging import get_logger
+
+        logger = get_logger("test.extras")
+        # Would raise KeyError without SafeExtraLogger.
+        logger.info("registered model", extra={"name": "minutes_lgbm", "version": "0.1.0"})
+        assert isinstance(logger.logger, stdlib_logging.Logger)
+
+    @pytest.mark.parametrize(
+        "key", ["name", "module", "filename", "args", "lineno", "message", "asctime"]
+    )
+    def test_every_reserved_key_is_survivable(self, key: str) -> None:
+        from euroleague_ai.core.logging import get_logger
+
+        get_logger("test.extras").warning("reserved", extra={key: "value"})
+
+    def test_colliding_values_are_kept_not_dropped(self) -> None:
+        """Suffixed rather than discarded -- the value still reaches the log."""
+        import io
+        import json
+        import logging as stdlib_logging
+
+        from euroleague_ai.core.logging import JsonFormatter, get_logger
+
+        buffer = io.StringIO()
+        handler = stdlib_logging.StreamHandler(buffer)
+        handler.setFormatter(JsonFormatter())
+        root = stdlib_logging.getLogger()
+        original = root.handlers[:]
+        root.handlers = [handler]
+        root.setLevel(stdlib_logging.INFO)
+        try:
+            get_logger("test.extras").info("m", extra={"name": "minutes_lgbm"})
+            payload = json.loads(buffer.getvalue().strip())
+        finally:
+            root.handlers = original
+
+        assert payload["name_"] == "minutes_lgbm"
+        assert payload["logger"] == "test.extras"

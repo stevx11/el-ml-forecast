@@ -247,7 +247,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["season_id"], ["seasons.id"], name="fk_player_team_stints_season_id_seasons"),
         sa.CheckConstraint(
             "effective_until IS NULL OR effective_until > effective_from",
-            name="ck_player_team_stints_effective_interval_valid",
+            name="effective_interval_valid",
         ),
     )
     op.create_index("ix_player_team_stints_observed_at", "player_team_stints", ["observed_at"])
@@ -273,7 +273,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["season_id"], ["seasons.id"], name="fk_team_coach_stints_season_id_seasons"),
         sa.CheckConstraint(
             "effective_until IS NULL OR effective_until > effective_from",
-            name="ck_team_coach_stints_effective_interval_valid",
+            name="effective_interval_valid",
         ),
     )
     op.create_index("ix_team_coach_stints_observed_at", "team_coach_stints", ["observed_at"])
@@ -358,7 +358,7 @@ def upgrade() -> None:
         ),
         sa.ForeignKeyConstraint(["player_id"], ["players.id"], name="fk_player_game_stats_player_id_players"),
         sa.UniqueConstraint("game_team_id", "player_id", name="uq_player_game_stats_team_player"),
-        sa.CheckConstraint("seconds_played >= 0", name="ck_player_game_stats_seconds_played_non_negative"),
+        sa.CheckConstraint("seconds_played >= 0", name="seconds_played_non_negative"),
     )
     op.create_index("ix_player_game_stats_observed_at", "player_game_stats", ["observed_at"])
     op.create_index("ix_player_game_stats_player", "player_game_stats", ["player_id"])
@@ -439,7 +439,7 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(["player_id"], ["players.id"], name="fk_news_events_player_id_players"),
         sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_news_events_team_id_teams"),
         sa.CheckConstraint(
-            "confidence >= 0 AND confidence <= 1", name="ck_news_events_confidence_in_unit_interval"
+            "confidence >= 0 AND confidence <= 1", name="confidence_in_unit_interval"
         ),
     )
     op.create_index("ix_news_events_observed_at", "news_events", ["observed_at"])
@@ -475,7 +475,7 @@ def upgrade() -> None:
         ),
         sa.CheckConstraint(
             "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
-            name="ck_player_status_events_confidence_in_unit_interval",
+            name="confidence_in_unit_interval",
         ),
     )
     op.create_index("ix_player_status_events_observed_at", "player_status_events", ["observed_at"])

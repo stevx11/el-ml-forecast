@@ -38,11 +38,13 @@ features_app = typer.Typer(help="Feature computation", no_args_is_help=True)
 news_app = typer.Typer(help="News collection", no_args_is_help=True)
 quality_app = typer.Typer(help="Data quality", no_args_is_help=True)
 ml_app = typer.Typer(help="Datasets, baselines, evaluation", no_args_is_help=True)
+maintenance_app = typer.Typer(help="Data repair", no_args_is_help=True)
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(features_app, name="features")
 app.add_typer(news_app, name="news")
 app.add_typer(quality_app, name="quality")
 app.add_typer(ml_app, name="ml")
+app.add_typer(maintenance_app, name="maintenance")
 
 T = TypeVar("T")
 
@@ -538,12 +540,42 @@ def cmd_ml_baselines(
             )
             typer.secho(line, fg=style, bold=rank == 0)
 
+        # Stratified view of the winner. An aggregate MAE can look healthy while
+        # the model is useless on the 10-25 minute rotation players, which is
+        # exactly where the interesting decisions are.
+        winner = block["ranking"][0]["predictor"] if block["ranking"] else None
+        buckets = block["detail"].get(winner, {}).get("by_minutes") if winner else None
+        if buckets:
+            typer.echo("")
+            typer.echo(f"      {winner} by realised minutes:")
+            typer.echo(f"        {'minutes':<10}{'n':>8}{'MAE':>9}{'bias':>9}")
+            for label, stats in buckets.items():
+                if stats["n"]:
+                    typer.echo(
+                        f"        {label:<10}{stats['n']:>8,}{stats['mae']:>9.3f}"
+                        f"{stats['bias']:>9.3f}"
+                    )
+
         best = block["best"]
+        bar = block["bar_to_beat"]
         typer.echo("")
-        typer.secho(
-            f"    bar to beat: {best} at MAE {block['bar_to_beat']:.3f}",
-            fg=typer.colors.YELLOW,
-        )
+        if bar is None or bar != bar:  # NaN
+            # Every baseline covering nothing means the features are empty, not
+            # that the baselines are bad. Saying so beats printing NaN.
+            typer.secho(
+                "    NO BASELINE COULD PREDICT ANY ROW.\n"
+                "    The snapshots exist but their features are null, which means the\n"
+                "    history queries found nothing at each cutoff. Almost always this is\n"
+                "    observed_at sitting in the future relative to the games it describes\n"
+                "    (the classic backfill mistake). Diagnose and fix with:\n"
+                "      euroleague-ai maintenance repair-observed-at --dry-run",
+                fg=typer.colors.RED,
+                bold=True,
+            )
+        else:
+            typer.secho(
+                f"    bar to beat: {best} at MAE {bar:.3f}", fg=typer.colors.YELLOW
+            )
 
     typer.echo("")
     typer.secho(
@@ -575,3 +607,403 @@ def cmd_ml_describe(
     typer.echo("")
     for key, value in summary.items():  # type: ignore[union-attr]
         typer.echo(f"  {key:<16} {value}")
+
+
+@maintenance_app.command("repair-observed-at")
+def cmd_repair_observed_at(
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Count affected rows without changing them.")
+    ] = False,
+) -> None:
+    """Rewrite observed_at to the time each fact became knowable.
+
+    Backfilled history was stamped with the ingest wall-clock, placing every
+    historical fact in the future relative to its own game and hiding it from
+    every feature query. This rewrites those timestamps from data already in the
+    database -- no API calls.
+
+    Only moves timestamps backwards: rows ingested live keep their real values.
+    """
+    from euroleague_ai.ingestion.repair import repair_observed_at
+
+    async def job() -> object:
+        async with session_scope() as session:
+            return (await repair_observed_at(session, dry_run=dry_run)).as_dict()
+
+    result = _run(job)
+    typer.echo("")
+    for key, value in result.items():  # type: ignore[union-attr]
+        typer.echo(f"  {key:<20} {value:,}")
+    if dry_run:
+        typer.secho("\n  dry run - nothing was modified", fg=typer.colors.YELLOW)
+    else:
+        typer.secho(
+            "\n  Snapshots built before this repair are stale. Purge and rebuild:\n"
+            "    euroleague-ai maintenance purge-snapshots\n"
+            "    euroleague-ai features backfill --from 2016 --to 2025",
+            fg=typer.colors.YELLOW,
+        )
+
+
+@maintenance_app.command("purge-snapshots")
+def cmd_purge_snapshots(
+    version: Annotated[
+        str | None,
+        typer.Option("--version", help="Only this feature set version. Default: all."),
+    ] = None,
+    yes: Annotated[bool, typer.Option("--yes", "-y", help="Skip confirmation.")] = False,
+) -> None:
+    """Delete feature snapshots so they can be rebuilt.
+
+    Snapshots are immutable by design, so correcting the data underneath them
+    does not update them -- they must be discarded and recomputed.
+    """
+    from euroleague_ai.ingestion.repair import purge_feature_snapshots
+
+    if not yes:
+        typer.confirm(
+            f"Delete feature snapshots ({version or 'all versions'})?", abort=True
+        )
+
+    async def job() -> object:
+        async with session_scope() as session:
+            return await purge_feature_snapshots(session, feature_set_version=version)
+
+    typer.echo(f"deleted {_run(job):,} snapshots")
+
+
+@ml_app.command("train")
+def cmd_ml_train(
+    target: Annotated[
+        str | None,
+        typer.Option("--target", "-t", help="Single target. Default: all five."),
+    ] = None,
+    start: Annotated[int | None, typer.Option("--from", help="First season start year.")] = None,
+    end: Annotated[int | None, typer.Option("--to", help="Last season start year.")] = None,
+    activate: Annotated[
+        bool | None,
+        typer.Option(
+            "--activate/--no-activate",
+            help="Override the gate. Default: activate only if it beats the baseline.",
+        ),
+    ] = None,
+) -> None:
+    """Train LightGBM models and register them.
+
+    Each model is scored on a chronological held-out test split and compared to
+    the best baseline on exactly those rows. A model that does not beat its
+    baseline is registered but never activated -- a model worse than arithmetic
+    is a liability, not an improvement.
+    """
+    from euroleague_ai.models.enums import PredictionTarget
+    from euroleague_ai.ml.pipeline import train_and_register
+    from euroleague_ai.ml.report import DEFAULT_TARGETS
+
+    if target:
+        try:
+            targets = (PredictionTarget[target.upper()],)
+        except KeyError as exc:
+            valid = ", ".join(t.name for t in PredictionTarget)
+            raise typer.BadParameter(f"unknown target {target!r}. Valid: {valid}") from exc
+    else:
+        targets = DEFAULT_TARGETS
+
+    codes: list[str] | None = None
+    if start is not None or end is not None:
+        codes = [f"E{y}" for y in range((start or 2000), (end or 2025) + 1)]
+
+    async def job() -> object:
+        async with session_scope() as session:
+            return await train_and_register(
+                session, targets=targets, season_codes=codes, activate=activate
+            )
+
+    report = _run(job)
+
+    typer.echo("")
+    typer.secho(f"Training - feature set {report['feature_set_version']}", bold=True)
+    passed = failed = 0
+
+    for name, block in report["targets"].items():
+        typer.echo("")
+        if "error" in block:
+            typer.secho(f"  {name}: {block['error']}", fg=typer.colors.RED)
+            failed += 1
+            continue
+
+        s = block["summary"]
+        ok = s["beats_baseline"]
+        passed, failed = (passed + 1, failed) if ok else (passed, failed + 1)
+
+        typer.secho(f"  {name}", fg=typer.colors.CYAN, bold=True)
+        typer.echo(
+            f"    model MAE    {s['model_mae']:.4f}   (RMSE {s['rmse']:.3f}, "
+            f"R2 {s['r2']:.3f}, bias {s['bias']:+.3f})"
+        )
+        typer.echo(f"    baseline     {s['baseline_mae']:.4f}   ({s['baseline']})")
+        typer.secho(
+            f"    improvement  {s['improvement_pct']:+.2f}%   "
+            f"{'PASS' if ok else 'FAIL - not activated'}",
+            fg=typer.colors.GREEN if ok else typer.colors.RED,
+            bold=True,
+        )
+
+        if s["improvement_pct"] > 25:
+            typer.secho(
+                "    WARNING: improvement this large is more likely a leak than a\n"
+                "    breakthrough. Published systems gain 5-15%. Investigate before\n"
+                "    trusting it.",
+                fg=typer.colors.YELLOW,
+                bold=True,
+            )
+
+        typer.echo(f"    top features: " + ", ".join(n for n, _ in block["top_features"][:5]))
+        typer.echo(f"    artifact:     {block['model']['artifact']}")
+
+    typer.echo("")
+    typer.secho(
+        f"{passed} target(s) passed the gate, {failed} failed.",
+        fg=typer.colors.GREEN if failed == 0 else typer.colors.YELLOW,
+        bold=True,
+    )
+
+
+@ml_app.command("models")
+def cmd_ml_models() -> None:
+    """List registered models, newest first."""
+    from euroleague_ai.ml.registry import list_models
+
+    async def job() -> object:
+        async with session_scope() as session:
+            rows = await list_models(session)
+            return [
+                {
+                    "name": m.name,
+                    "version": m.version,
+                    "target": str(m.target),
+                    "active": m.is_active,
+                    "mae": (m.metrics or {}).get("model_mae"),
+                    "baseline_mae": (m.metrics or {}).get("baseline_mae"),
+                    "improvement": (m.metrics or {}).get("improvement_pct"),
+                    "trained_at": m.trained_at.isoformat() if m.trained_at else None,
+                }
+                for m in rows
+            ]
+
+    models = _run(job)
+    if not models:  # type: ignore[truthy-bool]
+        typer.echo("no models registered yet - run `euroleague-ai ml train`")
+        return
+
+    typer.echo("")
+    typer.echo(f"  {'name':<22}{'ver':<8}{'MAE':>9}{'base':>9}{'impr%':>8}  active")
+    for m in models:  # type: ignore[union-attr]
+        mae = m["mae"] if m["mae"] is not None else float("nan")
+        base = m["baseline_mae"] if m["baseline_mae"] is not None else float("nan")
+        impr = m["improvement"] if m["improvement"] is not None else float("nan")
+        typer.secho(
+            f"  {m['name']:<22}{m['version']:<8}{mae:>9.4f}{base:>9.4f}{impr:>8.2f}"
+            f"  {'yes' if m['active'] else 'no'}",
+            fg=typer.colors.GREEN if m["active"] else None,
+        )
+
+
+@ml_app.command("predict")
+def cmd_ml_predict(
+    season: SeasonOption = "",
+    days: Annotated[
+        int, typer.Option("--days", "-d", help="Predict fixtures within this many days.")
+    ] = 7,
+    game_code: Annotated[
+        list[int] | None,
+        typer.Option("--game-code", "-g", help="Specific games. Repeatable."),
+    ] = None,
+) -> None:
+    """Predict upcoming fixtures with the active models.
+
+    Features are built at the same cutoff training used
+    (tip-off minus PREDICTION_LEAD_MINUTES), so the model is served exactly the
+    information set it learned on.
+    """
+    from euroleague_ai.ml.inference import predict_upcoming
+
+    async def job() -> object:
+        async with session_scope() as session:
+            return await predict_upcoming(
+                session,
+                season_code=season or None,
+                within_days=days,
+                game_codes=list(game_code) if game_code else None,
+            )
+
+    result = _run(job)
+    typer.echo("")
+    if "error" in result:  # type: ignore[operator]
+        typer.secho(f"  {result['error']}", fg=typer.colors.RED, bold=True)  # type: ignore[index]
+        raise typer.Exit(code=1)
+
+    typer.secho(
+        f"  {result['predictions']:,} predictions across {result['games']} game(s)",  # type: ignore[index]
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+    for target, model in (result.get("models") or {}).items():  # type: ignore[union-attr]
+        typer.echo(f"    {target:<24} {model}")
+    if result["games"] == 0:  # type: ignore[index]
+        typer.secho(
+            "  No scheduled games in the window. Ingest a season with upcoming\n"
+            "  fixtures first:  euroleague-ai ingest all --season E2026",
+            fg=typer.colors.YELLOW,
+        )
+
+
+@ml_app.command("show")
+def cmd_ml_show(
+    game_code: Annotated[int, typer.Option("--game-code", "-g")],
+    season: SeasonOption = "",
+) -> None:
+    """Print the projected lines for one game."""
+    from sqlalchemy import select
+
+    from euroleague_ai.models.competition import Season
+    from euroleague_ai.models.game import Game
+    from euroleague_ai.models.people import Player
+    from euroleague_ai.models.prediction import Prediction
+
+    async def job() -> object:
+        async with session_scope() as session:
+            season_code = season or _season_default()
+            game = (
+                await session.execute(
+                    select(Game)
+                    .join(Season, Season.id == Game.season_id)
+                    .where(Game.game_code == game_code, Season.code == season_code)
+                )
+            ).scalar_one_or_none()
+            if game is None:
+                raise typer.BadParameter(
+                    f"game {game_code} not found in season {season_code}"
+                )
+
+            rows = (
+                await session.execute(
+                    select(Player.full_name, Prediction.target, Prediction.predicted_value)
+                    .join(Player, Player.id == Prediction.player_id)
+                    .where(Prediction.game_id == game.id)
+                )
+            ).all()
+
+            by_player: dict[str, dict[str, float]] = {}
+            for full_name, target, value in rows:
+                by_player.setdefault(full_name, {})[str(target)] = float(value)
+            return {"tip_off": game.tip_off_utc.isoformat(), "players": by_player}
+
+    data = _run(job)
+    players = data["players"]  # type: ignore[index]
+    if not players:
+        typer.echo("no predictions for this game - run `euroleague-ai ml predict`")
+        return
+
+    order = ["MINUTES", "POINTS", "REBOUNDS", "ASSISTS", "THREE_POINTERS_MADE"]
+    typer.echo("")
+    typer.secho(f"  tip-off {data['tip_off']}", bold=True)  # type: ignore[index]
+    typer.echo(f"  {'player':<28}{'MIN':>7}{'PTS':>7}{'REB':>7}{'AST':>7}{'3PM':>7}")
+    for name, values in sorted(
+        players.items(), key=lambda kv: -kv[1].get("MINUTES", 0.0)
+    ):
+        cells = "".join(f"{values.get(t, float('nan')):>7.1f}" for t in order)
+        typer.echo(f"  {name:<28}{cells}")
+
+
+@ml_app.command("roster")
+def cmd_ml_roster(
+    game_code: Annotated[int, typer.Option("--game-code", "-g")],
+    season: SeasonOption = "",
+) -> None:
+    """Show the roster inference resolves for a game, and why.
+
+    Use this before trusting projections after a transfer window. It prints the
+    club each player is resolved to at the prediction cutoff, together with the
+    registration date that decided it -- which is what makes a wrong club
+    obvious rather than mysterious.
+    """
+    from sqlalchemy import select
+
+    from euroleague_ai.features.snapshot import default_prediction_timestamp
+    from euroleague_ai.models.competition import Season, Team
+    from euroleague_ai.models.game import Game
+    from euroleague_ai.models.people import Player, PlayerTeamStint
+    from euroleague_ai.ml.inference import candidate_players, current_club
+
+    async def job() -> object:
+        settings = get_settings()
+        async with session_scope() as session:
+            season_code = season or _season_default()
+            game = (
+                await session.execute(
+                    select(Game)
+                    .join(Season, Season.id == Game.season_id)
+                    .where(Game.game_code == game_code, Season.code == season_code)
+                )
+            ).scalar_one_or_none()
+            if game is None:
+                raise typer.BadParameter(
+                    f"game {game_code} not found in season {season_code}"
+                )
+
+            cutoff = default_prediction_timestamp(game.tip_off_utc, settings)
+            club_by_player = await current_club(session, as_of=cutoff)
+
+            sides = []
+            for team_id, label in (
+                (game.home_team_id, "HOME"),
+                (game.away_team_id, "AWAY"),
+            ):
+                team = (
+                    await session.execute(select(Team).where(Team.id == team_id))
+                ).scalar_one()
+                players = await candidate_players(
+                    session,
+                    team_id=team_id,
+                    season_id=game.season_id,
+                    as_of=cutoff,
+                    club_by_player=club_by_player,
+                )
+                detail = []
+                for player_id in players:
+                    row = (
+                        await session.execute(
+                            select(Player.full_name, PlayerTeamStint.effective_from)
+                            .join(
+                                PlayerTeamStint,
+                                PlayerTeamStint.player_id == Player.id,
+                            )
+                            .where(
+                                Player.id == player_id,
+                                PlayerTeamStint.team_id == team_id,
+                                PlayerTeamStint.effective_from <= cutoff,
+                            )
+                            .order_by(PlayerTeamStint.effective_from.desc())
+                            .limit(1)
+                        )
+                    ).first()
+                    if row:
+                        detail.append((row[0], row[1].date().isoformat()))
+                sides.append((label, team.name, detail))
+
+            return {"cutoff": cutoff.isoformat(), "sides": sides}
+
+    data = _run(job)
+    typer.echo("")
+    typer.secho(f"  cutoff {data['cutoff']}", bold=True)  # type: ignore[index]
+    for label, team_name, players in data["sides"]:  # type: ignore[index]
+        typer.echo("")
+        typer.secho(f"  {label}  {team_name}  ({len(players)} players)",
+                    fg=typer.colors.CYAN, bold=True)
+        for name, registered in players:
+            typer.echo(f"    {name:<32} registered {registered}")
+        if not players:
+            typer.secho(
+                "    none resolved - roster data for this season may be missing",
+                fg=typer.colors.YELLOW,
+            )
