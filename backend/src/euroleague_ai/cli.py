@@ -37,10 +37,12 @@ ingest_app = typer.Typer(help="Ingestion jobs", no_args_is_help=True)
 features_app = typer.Typer(help="Feature computation", no_args_is_help=True)
 news_app = typer.Typer(help="News collection", no_args_is_help=True)
 quality_app = typer.Typer(help="Data quality", no_args_is_help=True)
+ml_app = typer.Typer(help="Datasets, baselines, evaluation", no_args_is_help=True)
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(features_app, name="features")
 app.add_typer(news_app, name="news")
 app.add_typer(quality_app, name="quality")
+app.add_typer(ml_app, name="ml")
 
 T = TypeVar("T")
 
@@ -459,3 +461,117 @@ def cmd_quality_check() -> None:
     else:
         typer.secho(f"FAIL - {summary}", fg=typer.colors.RED, bold=True)
         raise typer.Exit(code=1)
+
+
+@ml_app.command("baselines")
+def cmd_ml_baselines(
+    target: Annotated[
+        str | None,
+        typer.Option("--target", "-t", help="Single target, e.g. POINTS. Default: all five."),
+    ] = None,
+    start: Annotated[int | None, typer.Option("--from", help="First season start year.")] = None,
+    end: Annotated[int | None, typer.Option("--to", help="Last season start year.")] = None,
+    min_train_rounds: Annotated[
+        int,
+        typer.Option(
+            "--min-train-rounds",
+            help="Rounds that must precede a fold. Early rounds have empty form windows.",
+        ),
+    ] = 5,
+) -> None:
+    """Backtest the baselines. This is the bar Phase 3 must clear.
+
+    Walk-forward by season and round -- train on rounds 1..k, evaluate k+1.
+    Never a random split: that would put a player's adjacent games on both sides
+    and measure interpolation rather than forecasting.
+    """
+    from euroleague_ai.models.enums import PredictionTarget
+    from euroleague_ai.ml.report import DEFAULT_TARGETS, run_baseline_report
+
+    if target:
+        try:
+            targets = (PredictionTarget[target.upper()],)
+        except KeyError as exc:
+            valid = ", ".join(t.name for t in PredictionTarget)
+            raise typer.BadParameter(f"unknown target {target!r}. Valid: {valid}") from exc
+    else:
+        targets = DEFAULT_TARGETS
+
+    codes: list[str] | None = None
+    if start is not None or end is not None:
+        codes = [f"E{y}" for y in range((start or 2000), (end or 2025) + 1)]
+
+    async def job() -> object:
+        async with session_scope() as session:
+            return await run_baseline_report(
+                session,
+                targets=targets,
+                season_codes=codes,
+                min_train_rounds=min_train_rounds,
+            )
+
+    report = _run(job)
+
+    typer.echo("")
+    typer.secho(
+        f"Baseline backtest - feature set {report['feature_set_version']}",
+        bold=True,
+    )
+    for name, block in report["targets"].items():
+        typer.echo("")
+        if "error" in block:
+            typer.secho(f"{name}: {block['error']}", fg=typer.colors.RED)
+            continue
+
+        data = block["dataset"]
+        typer.secho(f"  {name}", fg=typer.colors.CYAN, bold=True)
+        typer.echo(
+            f"    {data['rows']:,} rows | {data['players']:,} players | "
+            f"{data['games']:,} games | mean {data['target_mean']}"
+        )
+        typer.echo(f"    {'predictor':<22}{'MAE':>9}{'RMSE':>9}{'R2':>9}{'bias':>9}{'cover':>8}")
+        for rank, entry in enumerate(block["ranking"]):
+            style = typer.colors.GREEN if rank == 0 else None
+            line = (
+                f"    {entry['predictor']:<22}{entry['mae']:>9.3f}{entry['rmse']:>9.3f}"
+                f"{entry['r2']:>9.3f}{entry['bias']:>9.3f}{entry['coverage']:>8.2f}"
+            )
+            typer.secho(line, fg=style, bold=rank == 0)
+
+        best = block["best"]
+        typer.echo("")
+        typer.secho(
+            f"    bar to beat: {best} at MAE {block['bar_to_beat']:.3f}",
+            fg=typer.colors.YELLOW,
+        )
+
+    typer.echo("")
+    typer.secho(
+        "Phase 3 gate: a model must beat the best baseline above, per target, "
+        "on walk-forward validation.",
+        bold=True,
+    )
+
+
+@ml_app.command("describe")
+def cmd_ml_describe(
+    target: Annotated[str, typer.Option("--target", "-t")] = "POINTS",
+) -> None:
+    """Summarise the training dataset for one target."""
+    from euroleague_ai.features.registry import FEATURE_SET_VERSION
+    from euroleague_ai.models.enums import PredictionTarget
+    from euroleague_ai.ml.dataset import describe_rows, load_training_rows
+
+    async def job() -> object:
+        async with session_scope() as session:
+            rows = await load_training_rows(
+                session,
+                target=PredictionTarget[target.upper()],
+                feature_set_version=FEATURE_SET_VERSION,
+            )
+            return describe_rows(rows)
+
+    summary = _run(job)
+    typer.echo("")
+    for key, value in summary.items():  # type: ignore[union-attr]
+        typer.echo(f"  {key:<16} {value}")

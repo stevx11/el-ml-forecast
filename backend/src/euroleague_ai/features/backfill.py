@@ -24,7 +24,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,6 +46,11 @@ COMMIT_EVERY = 250
 
 #: Games to report progress on.
 LOG_EVERY_GAMES = 25
+
+#: Fixed key for the Postgres advisory lock that serialises backfill runs.
+#: Arbitrary value; only its stability matters, so it is written as a plain
+#: integer rather than derived from a hash that could change between releases.
+ADVISORY_LOCK_KEY = 815_243_001
 
 #: Rounds skipped at the start of each season. Form windows are empty or nearly
 #: empty here, so these rows mostly teach the model how to handle missingness
@@ -191,10 +196,22 @@ async def _games_to_process(
     season_codes: list[str] | None,
     min_round: int,
 ) -> list[Game]:
-    """Finished games eligible for snapshot generation, oldest first."""
+    """Games eligible for snapshot generation, oldest first.
+
+    Restricted to games that actually have box scores. A finished game with no
+    box score yields no training rows -- there is no outcome to learn from --
+    and walking it costs a query to discover nothing. Excluding them up front
+    makes the progress counter mean what it appears to mean, which matters when
+    the job runs for an hour.
+    """
+    has_box_score = (
+        select(GameTeam.game_id)
+        .join(PlayerGameStats, PlayerGameStats.game_team_id == GameTeam.id)
+        .distinct()
+    )
     stmt = (
         select(Game)
-        .where(Game.status == GameStatus.FINISHED)
+        .where(Game.status == GameStatus.FINISHED, Game.id.in_(has_box_score))
         .order_by(Game.tip_off_utc)
     )
     if min_round > 0:
@@ -230,6 +247,20 @@ async def backfill_snapshots(
     """
     clock = clock or SystemClock()
     settings = settings or get_settings()
+
+    # Session-scoped advisory lock. Released automatically when the connection
+    # closes, so a crashed run cannot leave the job permanently blocked.
+    acquired = (
+        await session.execute(
+            text("SELECT pg_try_advisory_lock(:key)"), {"key": ADVISORY_LOCK_KEY}
+        )
+    ).scalar_one()
+    if not acquired:
+        raise RuntimeError(
+            "another snapshot backfill is already running against this database. "
+            "Concurrent runs duplicate work and contend on the same rows -- wait "
+            "for it to finish, or stop it first."
+        )
 
     games = await _games_to_process(
         session, season_codes=season_codes, min_round=min_round
