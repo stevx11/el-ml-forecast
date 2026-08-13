@@ -10,12 +10,13 @@ dependency on every request.
 
 from __future__ import annotations
 
+import json
 from enum import StrEnum
 from functools import lru_cache
 from typing import Annotated, Literal
 
 from pydantic import Field, PostgresDsn, RedisDsn, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from euroleague_ai.core.errors import ConfigurationError
 
@@ -74,9 +75,17 @@ class Settings(BaseSettings):
     euroleague_competition_code: str = "E"
     euroleague_default_season: str = "E2025"
     euroleague_request_timeout_seconds: Annotated[float, Field(gt=0)] = 20.0
-    euroleague_max_concurrency: Annotated[int, Field(ge=1, le=32)] = 4
-    euroleague_request_rate_per_second: Annotated[float, Field(gt=0)] = 5.0
-    euroleague_max_retries: Annotated[int, Field(ge=0, le=10)] = 3
+    # Conservative on purpose. 5 req/s across 4 concurrent workers trips the
+    # upstream rate limiter roughly 20 box scores into a season backfill.
+    # The client also throttles itself further on any 429, so these are a
+    # starting point rather than a hard ceiling.
+    euroleague_max_concurrency: Annotated[int, Field(ge=1, le=32)] = 2
+    euroleague_request_rate_per_second: Annotated[float, Field(gt=0)] = 2.0
+    euroleague_max_retries: Annotated[int, Field(ge=0, le=10)] = 5
+    # Longest Retry-After we will sit through before giving up and asking the
+    # caller to resume later. Ingestion is resumable, so blocking a terminal
+    # for a five-minute cooldown is the wrong trade by default.
+    euroleague_max_retry_wait_seconds: Annotated[float, Field(ge=0)] = 60.0
     euroleague_user_agent: str = "euroleague-ai/0.1"
 
     data_provider: Literal["euroleague", "fixture"] = "euroleague"
@@ -92,7 +101,14 @@ class Settings(BaseSettings):
     )
 
     # -- News --------------------------------------------------------------
-    news_feed_urls: list[str] = Field(
+    #
+    # NoDecode is load-bearing. Without it, pydantic-settings sees a list-typed
+    # field, assumes the environment holds JSON, and calls json.loads() on the
+    # raw string *before* any validator runs -- so `NEWS_FEED_URLS=` (the
+    # default in .env.example) fails with "Expecting value: line 1 column 1".
+    # NoDecode hands the raw string to the validator below instead, which is
+    # what lets a plain comma-separated list work.
+    news_feed_urls: Annotated[list[str], NoDecode] = Field(
         default_factory=list,
         description="RSS/Atom feeds you are permitted to poll. Empty by default.",
     )
@@ -101,9 +117,29 @@ class Settings(BaseSettings):
     @field_validator("news_feed_urls", mode="before")
     @classmethod
     def _split_feed_urls(cls, value: object) -> object:
-        """Accept a comma-separated string, since env vars cannot hold lists."""
+        """Accept a comma-separated string, since env vars cannot hold lists.
+
+        Also tolerates a JSON array, so both of these work::
+
+            NEWS_FEED_URLS=https://a/rss, https://b/rss
+            NEWS_FEED_URLS=["https://a/rss", "https://b/rss"]
+        """
+        if value is None:
+            return []
         if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
+            text = value.strip()
+            if not text:
+                return []
+            if text.startswith("["):
+                try:
+                    decoded = json.loads(text)
+                except ValueError as exc:
+                    raise ValueError(
+                        "NEWS_FEED_URLS looks like JSON but could not be parsed. "
+                        "Use a comma-separated list instead."
+                    ) from exc
+                return decoded
+            return [item.strip() for item in text.split(",") if item.strip()]
         return value
 
     @field_validator("euroleague_api_base_url")

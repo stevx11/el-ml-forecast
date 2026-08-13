@@ -627,7 +627,10 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["player_feature_snapshot_id"],
             ["player_feature_snapshots.id"],
-            name="fk_predictions_player_feature_snapshot_id_player_feature_snapshots",
+            # Shortened deliberately: the convention-generated name would be 66
+            # characters, past PostgreSQL's 63-byte identifier limit. Must stay
+            # in sync with the explicit name on the ORM column.
+            name="fk_predictions_player_feature_snapshot_id",
         ),
         sa.ForeignKeyConstraint(["player_id"], ["players.id"], name="fk_predictions_player_id_players"),
         sa.ForeignKeyConstraint(["game_id"], ["games.id"], name="fk_predictions_game_id_games"),

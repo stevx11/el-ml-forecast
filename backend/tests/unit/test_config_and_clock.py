@@ -36,6 +36,37 @@ class TestSettings:
     def test_empty_feed_urls_is_an_empty_list(self) -> None:
         assert Settings(_env_file=None, news_feed_urls="").news_feed_urls == []  # type: ignore[arg-type]
 
+    def test_json_array_is_also_accepted(self) -> None:
+        settings = Settings(_env_file=None, news_feed_urls='["https://a/rss"]')  # type: ignore[arg-type]
+        assert settings.news_feed_urls == ["https://a/rss"]
+
+    @pytest.mark.parametrize("raw", ["", "   ", "https://a/rss", "https://a/rss,https://b/rss"])
+    def test_feed_urls_load_from_the_environment(
+        self, raw: str, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Regression: an empty NEWS_FEED_URLS must not crash startup.
+
+        pydantic-settings JSON-decodes list-typed fields *before* any validator
+        runs, so a bare ``NEWS_FEED_URLS=`` -- which is the default shipped in
+        .env.example -- died with "Expecting value: line 1 column 1" and took
+        down every entrypoint, including `alembic upgrade`. The NoDecode
+        annotation on the field is what prevents that.
+
+        This test goes through the environment rather than constructor kwargs on
+        purpose: the bug only manifested in the env source, so a kwargs-based
+        test would have passed while the application was broken.
+        """
+        monkeypatch.setenv("NEWS_FEED_URLS", raw)
+        settings = Settings(_env_file=None)
+        expected = [item.strip() for item in raw.split(",") if item.strip()]
+        assert settings.news_feed_urls == expected
+
+    def test_unset_feed_urls_defaults_to_empty(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.delenv("NEWS_FEED_URLS", raising=False)
+        assert Settings(_env_file=None).news_feed_urls == []
+
     def test_base_url_trailing_slash_is_stripped(self) -> None:
         settings = Settings(_env_file=None, euroleague_api_base_url="https://api/v2/")
         assert settings.euroleague_api_base_url == "https://api/v2"

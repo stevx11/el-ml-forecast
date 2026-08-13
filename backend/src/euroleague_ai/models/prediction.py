@@ -77,7 +77,15 @@ class Prediction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     )
     player_feature_snapshot_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True),
-        ForeignKey("player_feature_snapshots.id"),
+        # Named explicitly. The naming convention would generate
+        # "fk_predictions_player_feature_snapshot_id_player_feature_snapshots",
+        # which is 66 characters and exceeds PostgreSQL's 63-byte identifier
+        # limit. SQLAlchemy raises rather than silently truncating, so the
+        # migration fails outright.
+        ForeignKey(
+            "player_feature_snapshots.id",
+            name="fk_predictions_player_feature_snapshot_id",
+        ),
         nullable=False,
         doc="The exact inputs this prediction consumed.",
     )

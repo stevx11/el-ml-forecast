@@ -13,12 +13,23 @@ from euroleague_ai.providers.euroleague import EuroLeagueProvider, build_respons
 from euroleague_ai.providers.fixture import FixtureProvider
 
 
-def build_provider(settings: Settings | None = None) -> BasketballDataProvider:
-    """Return the configured provider."""
+def build_provider(
+    settings: Settings | None = None, *, wait_out_cooldowns: bool = False
+) -> BasketballDataProvider:
+    """Return the configured provider.
+
+    Args:
+        wait_out_cooldowns: Sit through long rate-limit cooldowns rather than
+            stopping. Only meaningful for the live provider.
+    """
     resolved = settings or get_settings()
     match resolved.data_provider:
         case "euroleague":
-            return EuroLeagueProvider(resolved, cache=build_response_cache(resolved))
+            return EuroLeagueProvider(
+                resolved,
+                cache=build_response_cache(resolved),
+                wait_out_cooldowns=wait_out_cooldowns,
+            )
         case "fixture":
             return FixtureProvider()
         case unknown:  # pragma: no cover - guarded by the Literal type

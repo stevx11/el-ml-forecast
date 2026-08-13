@@ -59,15 +59,61 @@ class _RetryableResponse(Exception):
     """Internal marker so tenacity retries transient HTTP statuses."""
 
 
+class _TooManyRequests(_RetryableResponse):
+    """HTTP 429. Retryable, but only after backing off properly.
+
+    Kept distinct from other transient statuses because the correct response is
+    different: a 503 usually clears on its own, whereas a 429 means *we* are the
+    problem and must slow down for the rest of the run.
+    """
+
+    def __init__(self, path: str, retry_after: float | None) -> None:
+        self.retry_after = retry_after
+        super().__init__(f"429 for {path}")
+
+
+class RateLimitCooldown(ProviderError):
+    """The provider has imposed a cooldown longer than we are willing to wait.
+
+    Deliberately **not** a subclass of :class:`_RetryableResponse`, so tenacity
+    does not retry it. When the upstream asks for five minutes, retrying inside
+    that window is worse than useless: the requests are refused anyway and many
+    limiters extend the penalty for traffic received during a cooldown.
+
+    Because box score ingestion is resumable, the right response is to stop the
+    run cleanly with progress committed and let the caller come back later --
+    not to block a terminal for half an hour.
+    """
+
+    def __init__(self, provider: str, retry_after: float) -> None:
+        self.retry_after = retry_after
+        minutes = retry_after / 60.0
+        super().__init__(
+            provider,
+            f"rate limit cooldown of {retry_after:.0f}s ({minutes:.1f} min) requested. "
+            "Progress is saved; re-run to resume, or pass --wait to sit it out.",
+        )
+
+
 class _RateLimiter:
-    """Minimum-interval rate limiter.
+    """Minimum-interval rate limiter that backs off when told to.
 
     A full token bucket is unnecessary here: the goal is politeness towards a
     free public API, not precise throughput shaping.
+
+    The adaptive part matters. A fixed rate that works for one endpoint can still
+    trip a 429 on another, and without :meth:`slow_down` the client would keep
+    hammering at the same cadence, exhaust its retries, and fail the run.
     """
 
+    #: Multiplier applied to the interval each time the server pushes back.
+    BACKOFF_FACTOR = 2.0
+    #: Never throttle below one request every this many seconds.
+    MAX_INTERVAL = 5.0
+
     def __init__(self, rate_per_second: float) -> None:
-        self._min_interval = 1.0 / rate_per_second if rate_per_second > 0 else 0.0
+        self._base_interval = 1.0 / rate_per_second if rate_per_second > 0 else 0.0
+        self._min_interval = self._base_interval
         self._lock = asyncio.Lock()
         self._next_allowed = 0.0
 
@@ -82,6 +128,47 @@ class _RateLimiter:
                 await asyncio.sleep(wait_for)
                 now = loop.time()
             self._next_allowed = now + self._min_interval
+
+    def slow_down(self) -> float:
+        """Halve the request rate. Returns the new interval, in seconds.
+
+        Deliberately sticky: the slower rate persists for the remainder of the
+        run rather than decaying back. Creeping back up to a rate we already know
+        is too fast just produces another 429 a few hundred requests later.
+        """
+        if self._min_interval <= 0:
+            self._min_interval = 0.5
+        else:
+            self._min_interval = min(
+                self._min_interval * self.BACKOFF_FACTOR, self.MAX_INTERVAL
+            )
+        return self._min_interval
+
+    @property
+    def current_interval(self) -> float:
+        return self._min_interval
+
+
+def _parse_retry_after(value: str | None) -> float | None:
+    """Parse a ``Retry-After`` header, which may be seconds or an HTTP date."""
+    if not value:
+        return None
+    text = value.strip()
+    try:
+        return max(0.0, float(text))
+    except ValueError:
+        pass
+    try:
+        from email.utils import parsedate_to_datetime
+
+        target = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    from datetime import UTC, datetime
+
+    if target.tzinfo is None:
+        target = target.replace(tzinfo=UTC)
+    return max(0.0, (target - datetime.now(UTC)).total_seconds())
 
 
 class ResponseCache:
@@ -136,8 +223,13 @@ class EuroLeagueProvider:
         *,
         client: httpx.AsyncClient | None = None,
         cache: ResponseCache | None = None,
+        wait_out_cooldowns: bool = False,
     ) -> None:
         self._settings = settings or get_settings()
+        # When True, sit through arbitrarily long cooldowns instead of aborting.
+        # Right for an unattended overnight backfill, wrong for an interactive
+        # run where blocking a terminal for half an hour is not acceptable.
+        self._wait_out_cooldowns = wait_out_cooldowns
         self._owns_client = client is None
         self._client = client or httpx.AsyncClient(
             base_url=self._settings.euroleague_api_base_url,
@@ -179,13 +271,34 @@ class EuroLeagueProvider:
         )
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        """Fetch and decode JSON, with caching, rate limiting and retries."""
+        """Fetch and decode JSON, with caching, rate limiting and retries.
+
+        Exhausted retries surface as :class:`ProviderError`, never as an internal
+        marker exception. Callers get one exception type to handle, and the
+        retry mechanism stays an implementation detail of this module.
+        """
         cache_key = f"provider:{self.provider_key}:{path}:{sorted((params or {}).items())}"
 
         if self._cache is not None and (cached := await self._cache.get(cache_key)) is not None:
             return cached
 
-        payload = await self._get_uncached(path, params)
+        try:
+            payload = await self._get_uncached(path, params)
+        except RateLimitCooldown:
+            raise
+        except _TooManyRequests as exc:
+            raise ProviderError(
+                self.provider_key,
+                f"rate limited after {self._settings.euroleague_max_retries} retries "
+                f"on {path}; current throttle is "
+                f"{self._limiter.current_interval:.2f}s between requests",
+            ) from exc
+        except _RetryableResponse as exc:
+            raise ProviderError(self.provider_key, f"{exc} (retries exhausted)") from exc
+        except httpx.TransportError as exc:
+            raise ProviderError(
+                self.provider_key, f"transport failure on {path}: {exc}"
+            ) from exc
 
         if self._cache is not None:
             await self._cache.set(cache_key, payload)
@@ -193,8 +306,11 @@ class EuroLeagueProvider:
 
     @retry(
         retry=retry_if_exception_type((httpx.TransportError, _RetryableResponse)),
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=0.5, min=0.5, max=8.0),
+        # Five attempts with a 2s..60s exponential wait. The previous settings
+        # (three attempts, 0.5s..8s) burned every retry inside two seconds, which
+        # is nowhere near long enough for a rate limiter to release.
+        stop=stop_after_attempt(5),
+        wait=wait_exponential(multiplier=2.0, min=2.0, max=60.0),
         reraise=True,
     )
     async def _get_uncached(self, path: str, params: dict[str, Any] | None) -> Any:
@@ -205,6 +321,31 @@ class EuroLeagueProvider:
             except httpx.TransportError:
                 logger.warning("provider transport error", extra={"path": path})
                 raise
+
+        if response.status_code == httpx.codes.TOO_MANY_REQUESTS:
+            # A 429 means we are the problem, so slow down permanently for the
+            # rest of this run rather than retrying at the same cadence.
+            interval = self._limiter.slow_down()
+            retry_after = _parse_retry_after(response.headers.get("Retry-After"))
+            logger.warning(
+                "rate limited by provider; throttling",
+                extra={
+                    "path": path,
+                    "retry_after": retry_after,
+                    "new_interval_seconds": round(interval, 2),
+                },
+            )
+
+            max_wait = self._settings.euroleague_max_retry_wait_seconds
+            if retry_after is not None and retry_after > max_wait and not self._wait_out_cooldowns:
+                # Long cooldown. Retrying inside the window is refused anyway and
+                # many limiters extend the penalty for traffic during it, so stop
+                # rather than making things worse.
+                raise RateLimitCooldown(self.provider_key, retry_after)
+
+            if retry_after:
+                await asyncio.sleep(retry_after if self._wait_out_cooldowns else min(retry_after, max_wait))
+            raise _TooManyRequests(path, retry_after)
 
         if response.status_code in _RETRYABLE_STATUS:
             logger.warning(

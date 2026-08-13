@@ -253,6 +253,26 @@ class PlayerHistoryRepository:
 
 
 @dataclass(frozen=True, slots=True)
+class SquadAppearance:
+    """One player's appearance (or non-appearance) in one prior team game."""
+
+    game_id: uuid.UUID
+    tip_off_utc: datetime
+    player_id: uuid.UUID
+    seconds_played: int
+    did_not_play: bool
+    is_starter: bool
+
+    @property
+    def minutes(self) -> float:
+        return self.seconds_played / 60.0
+
+    @property
+    def played(self) -> bool:
+        return not self.did_not_play and self.seconds_played > 0
+
+
+@dataclass(frozen=True, slots=True)
 class TeamGameLine:
     """A team's totals from one prior game."""
 
@@ -348,6 +368,70 @@ class TeamHistoryRepository:
                 turnovers=row.turnovers,
                 fg3a=row.fg3a,
                 fta=row.fta,
+            )
+            for row in (await self._session.execute(stmt)).all()
+        ]
+
+    async def squad_appearances(
+        self,
+        team_id: uuid.UUID,
+        *,
+        as_of: datetime,
+        games: int = 5,
+        season_id: uuid.UUID | None = None,
+    ) -> list[SquadAppearance]:
+        """Who appeared for this team in its last ``games`` fixtures before ``as_of``.
+
+        This backs the availability-proxy features. Historical pre-game
+        availability was never observed -- nobody recorded in 2018 that a player
+        was ruled out at 10:00 -- so ``player_status_events`` is empty for every
+        past season and always will be. Who actually took the floor in the
+        previous game is the best leak-free substitute, because it was known
+        before the next game tipped off.
+
+        Returns one row per (player, game), newest game first.
+        """
+        as_of = _as_of_guard(as_of)
+
+        recent_games = (
+            select(Game.id, Game.tip_off_utc)
+            .join(GameTeam, GameTeam.game_id == Game.id)
+            .where(
+                GameTeam.team_id == team_id,
+                Game.observed_at <= as_of,
+                Game.tip_off_utc < as_of,
+                Game.status == GameStatus.FINISHED,
+            )
+        )
+        if season_id is not None:
+            recent_games = recent_games.where(Game.season_id == season_id)
+
+        recent = recent_games.order_by(Game.tip_off_utc.desc()).limit(games).subquery()
+
+        stmt = (
+            select(
+                recent.c.id,
+                recent.c.tip_off_utc,
+                PlayerGameStats.player_id,
+                PlayerGameStats.seconds_played,
+                PlayerGameStats.did_not_play,
+                PlayerGameStats.is_starter,
+            )
+            .select_from(recent)
+            .join(GameTeam, and_(GameTeam.game_id == recent.c.id, GameTeam.team_id == team_id))
+            .join(PlayerGameStats, PlayerGameStats.game_team_id == GameTeam.id)
+            .where(PlayerGameStats.observed_at <= as_of)
+            .order_by(recent.c.tip_off_utc.desc())
+        )
+
+        return [
+            SquadAppearance(
+                game_id=row[0],
+                tip_off_utc=row[1],
+                player_id=row[2],
+                seconds_played=row[3],
+                did_not_play=row[4],
+                is_starter=row[5],
             )
             for row in (await self._session.execute(stmt)).all()
         ]

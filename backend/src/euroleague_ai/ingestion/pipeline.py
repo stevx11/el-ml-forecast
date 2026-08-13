@@ -570,3 +570,27 @@ class IngestionPipeline:
             .order_by(Game.tip_off_utc)
         )
         return list((await self._session.execute(stmt)).scalars().all())
+
+    async def game_codes_missing_stats(self, season: Season) -> list[int]:
+        """Finished games that have no box score yet, oldest first.
+
+        This is what makes a backfill resumable. A season is ~400 requests
+        against a rate-limited public API, so a run will sometimes stop partway;
+        re-running should pick up where it left off rather than re-fetching
+        everything and tripping the same rate limit again.
+        """
+        has_stats = (
+            select(GameTeam.game_id)
+            .join(PlayerGameStats, PlayerGameStats.game_team_id == GameTeam.id)
+            .distinct()
+        )
+        stmt = (
+            select(Game.game_code)
+            .where(
+                Game.season_id == season.id,
+                Game.status == GameStatus.FINISHED,
+                Game.id.notin_(has_stats),
+            )
+            .order_by(Game.tip_off_utc)
+        )
+        return list((await self._session.execute(stmt)).scalars().all())

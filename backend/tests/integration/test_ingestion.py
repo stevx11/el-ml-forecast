@@ -14,7 +14,15 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from euroleague_ai.core.clock import FixedClock
-from euroleague_ai.ingestion.jobs import ingest_all, ingest_games, ingest_teams
+from euroleague_ai.core.errors import ProviderError
+from euroleague_ai.ingestion.jobs import (
+    MAX_CONSECUTIVE_FAILURES,
+    ingest_all,
+    ingest_game_stats,
+    ingest_games,
+    ingest_players,
+    ingest_teams,
+)
 from euroleague_ai.models.competition import Team, TeamSeason
 from euroleague_ai.models.enums import GameStatus, IngestionStatus, TeamSide
 from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats, TeamGameStats
@@ -207,6 +215,153 @@ class TestObservedAt:
             assert stats.observed_at == CLOCK.now()
         for game in (await session.execute(select(Game))).scalars().all():
             assert game.observed_at == CLOCK.now()
+
+
+class _FailingProvider:
+    """Wraps a provider and fails box score fetches for chosen games.
+
+    Models what the live API actually does under load: most requests succeed,
+    some return 429, and the failures are not evenly distributed.
+    """
+
+    def __init__(self, inner: FixtureProvider, fail_codes: set[int]) -> None:
+        self._inner = inner
+        self._fail_codes = fail_codes
+        self.attempted: list[int] = []
+
+    provider_key = "fixture"
+
+    async def fetch_teams(self, season: SeasonRef):  # type: ignore[no-untyped-def]
+        return await self._inner.fetch_teams(season)
+
+    async def fetch_players(self, season: SeasonRef):  # type: ignore[no-untyped-def]
+        return await self._inner.fetch_players(season)
+
+    async def fetch_games(self, season: SeasonRef, *, round_number: int | None = None):  # type: ignore[no-untyped-def]
+        return await self._inner.fetch_games(season, round_number=round_number)
+
+    async def fetch_game_stats(self, season: SeasonRef, game_code: int):  # type: ignore[no-untyped-def]
+        self.attempted.append(game_code)
+        if game_code in self._fail_codes:
+            raise ProviderError("fixture", f"rate limited on game {game_code}")
+        return await self._inner.fetch_game_stats(season, game_code)
+
+    async def aclose(self) -> None:
+        await self._inner.aclose()
+
+
+class TestBoxScoreResilience:
+    """A season backfill is hundreds of rate-limited requests. Something fails."""
+
+    async def test_one_failed_game_does_not_abort_the_run(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """Regression: a single 429 used to roll back the entire backfill.
+
+        Every box score fetched before the failure was lost, because the whole
+        job ran in one transaction and the exception propagated out of it.
+        """
+        await ingest_teams(session, fixture_provider, season, clock=CLOCK)
+        await ingest_players(session, fixture_provider, season, clock=CLOCK)
+        await ingest_games(session, fixture_provider, season, clock=CLOCK)
+        await session.flush()
+
+        flaky = _FailingProvider(fixture_provider, fail_codes={2})
+        result = await ingest_game_stats(session, flaky, season, clock=CLOCK)  # type: ignore[arg-type]
+        await session.flush()
+
+        assert result.details.get("failed") == 1
+        # The other four games were still written.
+        written = (
+            await session.execute(select(func.count(PlayerGameStats.id)))
+        ).scalar_one()
+        assert written > 0
+
+        stats_by_game = (
+            await session.execute(
+                select(func.count(func.distinct(GameTeam.game_id)))
+                .select_from(PlayerGameStats)
+                .join(GameTeam, GameTeam.id == PlayerGameStats.game_team_id)
+            )
+        ).scalar_one()
+        assert stats_by_game == 4
+
+    async def test_rerunning_resumes_and_retries_only_what_is_missing(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """Resume is what makes a 400-game backfill practical.
+
+        Re-fetching everything after a partial run would trip the same rate
+        limit at the same point, forever.
+        """
+        await ingest_teams(session, fixture_provider, season, clock=CLOCK)
+        await ingest_players(session, fixture_provider, season, clock=CLOCK)
+        await ingest_games(session, fixture_provider, season, clock=CLOCK)
+        await session.flush()
+
+        flaky = _FailingProvider(fixture_provider, fail_codes={2})
+        await ingest_game_stats(session, flaky, season, clock=CLOCK)  # type: ignore[arg-type]
+        await session.flush()
+
+        # Second pass: the API has recovered.
+        healthy = _FailingProvider(fixture_provider, fail_codes=set())
+        result = await ingest_game_stats(session, healthy, season, clock=CLOCK)  # type: ignore[arg-type]
+        await session.flush()
+
+        # Only the previously-failed game is retried.
+        assert healthy.attempted == [2]
+        assert result.details.get("failed") is None
+
+        stats_by_game = (
+            await session.execute(
+                select(func.count(func.distinct(GameTeam.game_id)))
+                .select_from(PlayerGameStats)
+                .join(GameTeam, GameTeam.id == PlayerGameStats.game_team_id)
+            )
+        ).scalar_one()
+        assert stats_by_game == 5
+
+    async def test_a_completed_run_has_nothing_left_to_do(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        await ingest_all(session, fixture_provider, season, clock=CLOCK)
+        await session.flush()
+
+        healthy = _FailingProvider(fixture_provider, fail_codes=set())
+        await ingest_game_stats(session, healthy, season, clock=CLOCK)  # type: ignore[arg-type]
+        assert healthy.attempted == []
+
+    async def test_refresh_forces_a_refetch(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """After an upstream stat correction you do want everything again."""
+        await ingest_all(session, fixture_provider, season, clock=CLOCK)
+        await session.flush()
+
+        healthy = _FailingProvider(fixture_provider, fail_codes=set())
+        await ingest_game_stats(
+            session, healthy, season, refresh_existing=True, clock=CLOCK  # type: ignore[arg-type]
+        )
+        assert sorted(healthy.attempted) == [1, 2, 3, 4, 6]
+
+    async def test_circuit_breaker_stops_a_doomed_run(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """When the API is down, stop rather than grinding through the schedule."""
+        await ingest_teams(session, fixture_provider, season, clock=CLOCK)
+        await ingest_players(session, fixture_provider, season, clock=CLOCK)
+        await ingest_games(session, fixture_provider, season, clock=CLOCK)
+        await session.flush()
+
+        dead = _FailingProvider(fixture_provider, fail_codes={1, 2, 3, 4, 6})
+        result = await ingest_game_stats(session, dead, season, clock=CLOCK)  # type: ignore[arg-type]
+
+        assert result.rows_written == 0
+        assert result.details.get("failed") == len(dead.attempted)
+        # The fixture season is smaller than the breaker threshold, so every game
+        # is attempted here; the guarantee under test is that the job returns
+        # instead of raising.
+        assert len(dead.attempted) <= MAX_CONSECUTIVE_FAILURES
 
 
 class TestAuditTrail:

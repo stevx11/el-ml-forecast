@@ -36,9 +36,11 @@ app = typer.Typer(help="EuroLeague AI operations", no_args_is_help=True)
 ingest_app = typer.Typer(help="Ingestion jobs", no_args_is_help=True)
 features_app = typer.Typer(help="Feature computation", no_args_is_help=True)
 news_app = typer.Typer(help="News collection", no_args_is_help=True)
+quality_app = typer.Typer(help="Data quality", no_args_is_help=True)
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(features_app, name="features")
 app.add_typer(news_app, name="news")
+app.add_typer(quality_app, name="quality")
 
 T = TypeVar("T")
 
@@ -135,15 +137,32 @@ def cmd_ingest_stats(
         list[int] | None,
         typer.Option("--game-code", "-g", help="Specific game codes. Repeatable."),
     ] = None,
+    refresh: Annotated[
+        bool,
+        typer.Option(
+            "--refresh",
+            help="Re-fetch games that already have box scores (after a stat correction).",
+        ),
+    ] = False,
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait",
+            help="Sit through long rate-limit cooldowns instead of stopping. "
+            "For unattended backfills; can block for many minutes.",
+        ),
+    ] = False,
 ) -> None:
     """Fetch and store box scores for finished games.
 
-    Idempotent -- safe to re-run after an upstream stat correction.
+    Resumes by default: games that already have box scores are skipped, so
+    re-running after an interrupted backfill continues where it stopped.
+    Idempotent either way.
     """
 
     async def job() -> object:
         settings = get_settings()
-        provider = build_provider(settings)
+        provider = build_provider(settings, wait_out_cooldowns=wait)
         try:
             async with session_scope() as session:
                 return await ingest_game_stats(
@@ -151,6 +170,7 @@ def cmd_ingest_stats(
                     provider,
                     season_ref(season or _season_default(), settings),
                     game_codes=list(game_code) if game_code else None,
+                    refresh_existing=refresh,
                 )
         finally:
             await provider.aclose()
@@ -159,16 +179,27 @@ def cmd_ingest_stats(
 
 
 @ingest_app.command("all")
-def cmd_ingest_all(season: SeasonOption = "") -> None:
+def cmd_ingest_all(
+    season: SeasonOption = "",
+    wait: Annotated[
+        bool,
+        typer.Option(
+            "--wait",
+            help="Sit through long rate-limit cooldowns instead of stopping. "
+            "Use for unattended historical backfills.",
+        ),
+    ] = False,
+) -> None:
     """Run every ingestion job in dependency order.
 
     This is the "make it work" command: teams, then players, then games, then
-    box scores.
+    box scores. Each stage commits before the next, and box scores resume, so
+    interrupting and re-running is always safe.
     """
 
     async def job() -> object:
         settings = get_settings()
-        provider = build_provider(settings)
+        provider = build_provider(settings, wait_out_cooldowns=wait)
         try:
             async with session_scope() as session:
                 return await ingest_all(
@@ -178,6 +209,53 @@ def cmd_ingest_all(season: SeasonOption = "") -> None:
             await provider.aclose()
 
     _report("all", _run(job))
+
+
+@ingest_app.command("seasons")
+def cmd_ingest_seasons(
+    start: Annotated[int, typer.Option("--from", help="First season start year.")] = 2016,
+    end: Annotated[int, typer.Option("--to", help="Last season start year.")] = 2025,
+    wait: Annotated[
+        bool, typer.Option("--wait", help="Sit through rate-limit cooldowns.")
+    ] = True,
+) -> None:
+    """Backfill a range of seasons, newest first.
+
+    Newest first on purpose: recent seasons matter most for modelling, so if the
+    backfill is interrupted you keep the data you care about. Everything is
+    resumable, so re-running continues where it stopped.
+
+    The default range starts at 2016 because the 2016-17 season introduced the
+    current 30-round round-robin format. Earlier seasons used a group stage plus
+    Top 16, which gives different schedule density and rest patterns -- usable,
+    but not directly comparable for schedule features.
+    """
+    codes = [f"E{year}" for year in range(end, start - 1, -1)]
+    typer.echo(f"Backfilling {len(codes)} seasons: {', '.join(codes)}")
+
+    async def job() -> object:
+        settings = get_settings()
+        provider = build_provider(settings, wait_out_cooldowns=wait)
+        summary: dict[str, str] = {}
+        try:
+            for code in codes:
+                typer.echo(f"--- {code} ---")
+                try:
+                    async with session_scope() as session:
+                        result = await ingest_all(
+                            session, provider, season_ref(code, settings)
+                        )
+                    summary[code] = f"{result.rows_written} rows"
+                except Exception as exc:  # noqa: BLE001
+                    # One bad season must not abandon the rest of the range.
+                    logger.exception("season failed", extra={"season": code})
+                    summary[code] = f"FAILED: {type(exc).__name__}"
+                typer.echo(f"    {code}: {summary[code]}")
+        finally:
+            await provider.aclose()
+        return summary
+
+    _report("seasons", _run(job))
 
 
 @features_app.command("build")
@@ -274,3 +352,44 @@ def cmd_version() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     app()
+
+
+@quality_app.command("check")
+def cmd_quality_check() -> None:
+    """Run integrity checks over the ingested data.
+
+    Exits non-zero if any ERROR-level finding is present, so this can gate a
+    training pipeline rather than merely informing a human.
+    """
+    from euroleague_ai.quality.checks import Severity, run_quality_checks
+
+    async def job() -> object:
+        async with session_scope() as session:
+            return await run_quality_checks(session)
+
+    report = _run(job)
+
+    colours = {
+        Severity.ERROR: typer.colors.RED,
+        Severity.WARNING: typer.colors.YELLOW,
+        Severity.INFO: typer.colors.CYAN,
+    }
+    order = {Severity.ERROR: 0, Severity.WARNING: 1, Severity.INFO: 2}
+
+    typer.echo("")
+    for finding in sorted(report.findings, key=lambda f: order[f.severity]):
+        tag = typer.style(f"{finding.severity:<7}", fg=colours[finding.severity], bold=True)
+        suffix = f"  [{finding.count:,}]" if finding.count else ""
+        typer.echo(f"{tag} {finding.check}{suffix}")
+        typer.echo(f"        {finding.message}")
+        for line in finding.sample:
+            typer.echo(f"          - {line}")
+        typer.echo("")
+
+    errors, warnings = len(report.errors), len(report.warnings)
+    summary = f"{errors} error(s), {warnings} warning(s)"
+    if report.ok:
+        typer.secho(f"PASS - {summary}", fg=typer.colors.GREEN, bold=True)
+    else:
+        typer.secho(f"FAIL - {summary}", fg=typer.colors.RED, bold=True)
+        raise typer.Exit(code=1)
