@@ -1010,6 +1010,115 @@ def cmd_ml_show(
         )
 
 
+@ml_app.command("why")
+def cmd_ml_why(
+    game_code: Annotated[int, typer.Option("--game-code", "-g")],
+    player: Annotated[
+        str, typer.Option("--player", "-p", help="Name, or any part of one.")
+    ],
+    season: SeasonOption = "",
+    raw: Annotated[
+        bool,
+        typer.Option("--raw", help="Also print the largest per-feature SHAP values."),
+    ] = False,
+) -> None:
+    """Explain one player's projected line.
+
+    Prints the signed drivers behind each target, from exact TreeSHAP
+    contributions grouped into themes. These explain the *model* -- what moved
+    this prediction, given these inputs -- not basketball.
+    """
+    from sqlalchemy import select
+
+    from euroleague_ai.models.competition import Season
+    from euroleague_ai.models.game import Game
+    from euroleague_ai.models.people import Player
+    from euroleague_ai.models.prediction import ModelVersion, Prediction
+
+    async def job() -> object:
+        async with session_scope() as session:
+            season_code = season or _season_default()
+            game = (
+                await session.execute(
+                    select(Game)
+                    .join(Season, Season.id == Game.season_id)
+                    .where(Game.game_code == game_code, Season.code == season_code)
+                )
+            ).scalar_one_or_none()
+            if game is None:
+                raise typer.BadParameter(
+                    f"game {game_code} not found in season {season_code}"
+                )
+
+            rows = (
+                await session.execute(
+                    select(
+                        Player.full_name,
+                        Prediction.target,
+                        Prediction.predicted_value,
+                        Prediction.explanation,
+                    )
+                    .join(Player, Player.id == Prediction.player_id)
+                    .join(ModelVersion, ModelVersion.id == Prediction.model_version_id)
+                    .where(
+                        Prediction.game_id == game.id,
+                        ModelVersion.is_active.is_(True),
+                        Player.full_name.ilike(f"%{player}%"),
+                    )
+                )
+            ).all()
+            return [
+                {
+                    "player": name,
+                    "target": str(target),
+                    "value": float(value),
+                    "explanation": explanation,
+                }
+                for name, target, value, explanation in rows
+            ]
+
+    results = _run(job)
+    if not results:  # type: ignore[truthy-bool]
+        typer.echo(f"no predictions matching '{player}' in game {game_code}")
+        return
+
+    order = {t: i for i, t in enumerate(
+        ["MINUTES", "POINTS", "REBOUNDS", "ASSISTS", "THREE_POINTERS_MADE"]
+    )}
+    results = sorted(  # type: ignore[assignment]
+        results,  # type: ignore[arg-type]
+        key=lambda r: (r["player"], order.get(r["target"], 99)),
+    )
+
+    current = None
+    for row in results:  # type: ignore[union-attr]
+        if row["player"] != current:
+            current = row["player"]
+            typer.echo("")
+            typer.secho(f"  {current}", bold=True)
+
+        typer.secho(f"    {row['target']:<22}{row['value']:>6.1f}", fg=typer.colors.CYAN)
+
+        explanation = row["explanation"]
+        if not explanation:
+            typer.echo("      (no explanation stored - predict again with a current model)")
+            continue
+
+        for driver in explanation.get("drivers", []):
+            colour = (
+                typer.colors.GREEN if driver["direction"] == "+" else typer.colors.RED
+            )
+            typer.secho(
+                f"      {driver['direction']} {driver['label']:<38}"
+                f"{driver['impact']:>+7.2f}",
+                fg=colour,
+            )
+
+        if raw:
+            for name, value in explanation.get("top_features", [])[:6]:
+                typer.echo(f"        {name:<40}{value:>+8.3f}")
+
+
 @ml_app.command("roster")
 def cmd_ml_roster(
     game_code: Annotated[int, typer.Option("--game-code", "-g")],

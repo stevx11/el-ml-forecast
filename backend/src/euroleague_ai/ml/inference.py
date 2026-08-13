@@ -43,6 +43,7 @@ from euroleague_ai.core.errors import NotFoundError
 from euroleague_ai.core.logging import get_logger
 from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features
 from euroleague_ai.ml.distribution import ResidualDistribution, thresholds_for
+from euroleague_ai.ml.explain import explain_prediction
 from euroleague_ai.ml.registry import distribution_path
 from euroleague_ai.features.snapshot import default_prediction_timestamp
 from euroleague_ai.models.enums import GameStatus, PredictionTarget
@@ -89,6 +90,44 @@ class LoadedModel:
         x = features_to_matrix(feature_dicts, self.feature_names)
         raw = self.booster.predict(x)
         return [max(0.0, float(value) + self.calibration_offset) for value in raw]
+
+    def explain_batch(
+        self, feature_dicts: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
+        """Exact TreeSHAP contributions per row, grouped into readable themes.
+
+        Uses LightGBM's own ``pred_contrib``, which is exact for trees and needs
+        no extra dependency. The returned matrix has one extra trailing column
+        holding the base value, so it is ``len(feature_names) + 1`` wide -- that
+        trailing term is the model's expected output, not a feature.
+        """
+        if not feature_dicts:
+            return []
+
+        x = features_to_matrix(feature_dicts, self.feature_names)
+        contributions = self.booster.predict(x, pred_contrib=True)
+
+        width = len(self.feature_names)
+        explanations: list[dict[str, Any]] = []
+        for row in contributions:
+            values = [float(v) for v in row]
+            if len(values) != width + 1:
+                # Refuse rather than mis-attribute. A silent off-by-one here
+                # would shift every contribution onto the wrong feature name and
+                # produce explanations that read perfectly and are entirely wrong.
+                raise ValueError(
+                    f"pred_contrib returned {len(values)} columns for "
+                    f"{width} features; expected {width + 1}"
+                )
+            explanations.append(
+                explain_prediction(
+                    self.feature_names,
+                    values[:width],
+                    base_value=values[width],
+                    calibration_offset=self.calibration_offset,
+                )
+            )
+        return explanations
 
     def distribution_for(
         self, predicted: float, features: dict[str, Any]
@@ -440,7 +479,10 @@ async def predict_game(
 
     for target, model in models.items():
         values = model.predict_batch(feature_dicts)
-        for (player_id, snapshot_id, features), value in zip(rows, values, strict=True):
+        explanations = model.explain_batch(feature_dicts)
+        for (player_id, snapshot_id, features), value, explanation in zip(
+            rows, values, explanations, strict=True
+        ):
             spread = model.distribution_for(value, features)
             await session.execute(
                 pg_insert(Prediction)
@@ -456,6 +498,7 @@ async def predict_game(
                     quantiles=spread.get("quantiles"),
                     threshold_probabilities=spread.get("threshold_probabilities"),
                     confidence=spread.get("confidence"),
+                    explanation=explanation,
                     prediction_timestamp=cutoff,
                 )
                 .on_conflict_do_update(
@@ -474,6 +517,7 @@ async def predict_game(
                             "threshold_probabilities"
                         ),
                         "confidence": spread.get("confidence"),
+                        "explanation": explanation,
                     },
                 )
             )
