@@ -3,6 +3,21 @@
 Rolling, weighted and trend statistics over the player's own prior box scores,
 plus starter/usage rates and schedule congestion.
 
+**Rolling windows cross season boundaries; season aggregates do not.**
+
+Scoping every window to the current season made round-one projections useless:
+with no games played, every form feature was null, every player arrived at the
+model with an identical all-NaN vector, and LightGBM returned its global prior --
+Valanciunas and a third-string guard projected the same 8.9 minutes.
+
+Form does carry across a summer. Weakened by roster churn and a new role, but far
+from zero, and every serious projection system leans on prior-season data for
+early-season games. So ``last5_points_mean`` means the last five games the player
+played, whenever they were, while ``season_points_mean`` stays scoped to the
+current season. ``career_window_is_current_season`` tells the model what fraction
+of the window is same-season, so it can learn how much to trust each rather than
+having a weighting hard-coded for it.
+
 One of six families composed by :mod:`euroleague_ai.features.registry`; the
 others cover team strength, opponent strength and teammate availability. News
 features are specified in ``docs/ml-roadmap.md`` phase 5.
@@ -150,20 +165,36 @@ async def build_player_form_features(
     players = PlayerHistoryRepository(session)
     teams = TeamHistoryRepository(session)
 
-    history = await players.recent_games(
-        player_id, as_of=as_of, limit=max(WINDOWS), season_id=season_id
+    # Rolling windows read the player's *career*, crossing season boundaries.
+    # "Last five games" means the last five games, full stop.
+    career = await players.recent_games(
+        player_id, as_of=as_of, limit=max(WINDOWS), season_id=None
     )
+    # Season aggregates stay scoped, because "this season's average" is a
+    # different and legitimate quantity.
     season_history = await players.recent_games(
         player_id, as_of=as_of, limit=200, season_id=season_id
     )
 
-    features: dict[str, float | None] = {"games_played_season": float(len(season_history))}
+    features: dict[str, float | None] = {
+        "games_played_season": float(len(season_history)),
+        "games_played_career_window": float(len(career)),
+        # How much of the rolling window comes from the current season. At round
+        # one this is 0.0 and the model knows to lean on career form; by round
+        # twenty it is 1.0 and the two agree. This is the feature that lets the
+        # model learn the weighting instead of us guessing it.
+        "career_window_is_current_season": _round(
+            _mean([float(line.season_id == season_id) for line in career])
+        )
+        if career and season_id is not None
+        else None,
+    }
 
     for name, attribute in _METRICS.items():
         season_values = _values(season_history, attribute)
         features[f"season_{name}_mean"] = _round(_mean(season_values))
 
-        window_values = _values(history, attribute)
+        window_values = _values(career, attribute)
         for window in WINDOWS:
             features[f"last{window}_{name}_mean"] = _round(_mean(window_values[:window]))
 
@@ -171,7 +202,7 @@ async def build_player_form_features(
         features[f"std10_{name}"] = _round(_stdev(window_values[:10]))
         features[f"trend10_{name}"] = _round(_trend(window_values[:10]))
 
-    features.update(_role_features(history))
+    features.update(_role_features(career))
     features.update(
         await _schedule_features(players, teams, player_id, team_id, as_of=as_of)
     )

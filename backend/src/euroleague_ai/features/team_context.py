@@ -36,6 +36,12 @@ FORM_WINDOW = 5
 #: ratings when possession data is missing.
 FALLBACK_POSSESSIONS = 72.0
 
+#: Below this many games in the current season, team ratings fall back to recent
+#: history regardless of season. Five is enough for a rating to mean something;
+#: below it the sample is noise and last season's rating is the better estimate,
+#: even accounting for summer roster churn.
+MIN_SEASON_GAMES = 5
+
 
 def _safe_div(numerator: float, denominator: float) -> float | None:
     """Divide, returning ``None`` rather than raising or silently yielding zero."""
@@ -162,12 +168,23 @@ async def build_team_context_features(
     as_of = ensure_utc(as_of, field="as_of")
     teams = TeamHistoryRepository(session)
 
+    # Same reasoning as the player windows: a club with no games this season is
+    # not a club of unknown strength, it is last season's club minus whoever
+    # left. Falling back to recent history beats handing the model nulls for
+    # every fixture until November.
     own = await teams.recent_games(
         team_id, as_of=as_of, limit=SEASON_WINDOW, season_id=season_id
     )
+    if len(own) < MIN_SEASON_GAMES:
+        own = await teams.recent_games(team_id, as_of=as_of, limit=SEASON_WINDOW)
+
     opponent = await teams.recent_games(
         opponent_team_id, as_of=as_of, limit=SEASON_WINDOW, season_id=season_id
     )
+    if len(opponent) < MIN_SEASON_GAMES:
+        opponent = await teams.recent_games(
+            opponent_team_id, as_of=as_of, limit=SEASON_WINDOW
+        )
 
     features: dict[str, float | None] = {}
     features.update(summarise_team(own, "team"))

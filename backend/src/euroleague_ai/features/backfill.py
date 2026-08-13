@@ -52,11 +52,23 @@ LOG_EVERY_GAMES = 25
 #: integer rather than derived from a hash that could change between releases.
 ADVISORY_LOCK_KEY = 815_243_001
 
-#: Rounds skipped at the start of each season. Form windows are empty or nearly
-#: empty here, so these rows mostly teach the model how to handle missingness
-#: rather than how basketball works. They are excluded from training data by
-#: default; pass ``min_round=0`` to keep them.
-DEFAULT_MIN_ROUND = 4
+#: Rounds skipped at the start of each season.
+#:
+#: Under feature set v2 this was 4: season-scoped form windows were empty in
+#: rounds 1-3, so those rows taught the model about missingness rather than about
+#: basketball. Under v3 the windows cross season boundaries, so a returning
+#: player carries real form into round one and the rows are worth training on.
+#:
+#: Keeping the exclusion would now be actively harmful. If the training set never
+#: contains a round-one row, the model never learns how to weigh career form
+#: against an empty current season -- which is exactly the situation it faces
+#: every October in production. Train on the distribution you predict on.
+#:
+#: Rows that are still genuinely blank (a rookie's debut, or any game in the
+#: earliest ingested season) stay in: LightGBM learns a split for missing and
+#: falls back toward the global mean, which is the right answer for a player we
+#: know nothing about.
+DEFAULT_MIN_ROUND = 1
 
 
 @dataclass(slots=True)
@@ -242,7 +254,7 @@ async def backfill_snapshots(
 
     Args:
         season_codes: Restrict to these seasons. ``None`` means all.
-        min_round: Skip early rounds where form windows are empty.
+        min_round: Skip rounds below this number. See ``DEFAULT_MIN_ROUND``.
         limit: Stop after this many games. Useful for a smoke run.
     """
     clock = clock or SystemClock()

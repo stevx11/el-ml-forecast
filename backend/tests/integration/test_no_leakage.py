@@ -34,13 +34,20 @@ from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_fe
 from euroleague_ai.features.team_context import build_team_context_features
 from euroleague_ai.ingestion.jobs import ingest_all
 from euroleague_ai.models.availability import PlayerStatusEvent
-from euroleague_ai.models.enums import AvailabilityStatus, EntityType, StatusSourceType
+from euroleague_ai.models.competition import Season
+from euroleague_ai.models.enums import (
+    AvailabilityStatus,
+    EntityType,
+    GameStatus,
+    StatusSourceType,
+    TeamSide,
+)
 from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats
 from euroleague_ai.models.identity import ExternalRef
 from euroleague_ai.providers.base import SeasonRef
 from euroleague_ai.providers.fixture import FixtureProvider
 from euroleague_ai.repositories.history import PlayerHistoryRepository
-from tests.conftest import requires_db
+from tests.conftest import SEASON, requires_db
 
 pytestmark = [pytest.mark.integration, requires_db]
 
@@ -51,6 +58,8 @@ PRE_CUTOFF_POINTS = [10, 12, 14, 16]
 POST_CUTOFF_POINTS = 60
 
 # Game 5 tips off at 18:00 UTC; the default lead is 60 minutes.
+SEASON_CODE = SEASON.season_code
+
 TARGET_TIP_OFF = datetime(2025, 10, 31, 18, 0, tzinfo=UTC)
 CUTOFF = TARGET_TIP_OFF - timedelta(minutes=60)
 
@@ -71,11 +80,28 @@ async def _internal_id(
     return (await session.execute(stmt)).scalar_one()
 
 
-async def _features(session: AsyncSession, *, as_of: datetime) -> dict[str, float | None]:
+async def _season_id(session: AsyncSession, code: str = SEASON_CODE) -> uuid.UUID:
+    return (await session.execute(select(Season.id).where(Season.code == code))).scalar_one()
+
+
+async def _features(
+    session: AsyncSession, *, as_of: datetime, season_id: uuid.UUID | None = None
+) -> dict[str, float | None]:
+    """Build Petrovic's form features.
+
+    ``season_id`` defaults to the fixture season rather than to ``None``, because
+    ``None`` means "do not scope" -- which makes ``season_*`` features quietly
+    read the player's whole career and would let a cross-season test pass for the
+    wrong reason. Production always passes a season id.
+    """
     player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
     team_id = await _internal_id(session, EntityType.TEAM, "PAR")
     return await build_player_form_features(
-        session, player_id=player_id, team_id=team_id, as_of=as_of
+        session,
+        player_id=player_id,
+        team_id=team_id,
+        as_of=as_of,
+        season_id=season_id if season_id is not None else await _season_id(session),
     )
 
 
@@ -172,6 +198,164 @@ class TestLateArrivingKnowledgeIsInvisible:
         # And it becomes visible once the cutoff moves past the moment we learned it.
         after = await _features(session, as_of=late + timedelta(minutes=1))
         assert after["season_points_mean"] != pytest.approx(expected)
+
+
+class TestRollingWindowsCrossSeasons:
+    """v3: last-N windows span the summer break; season aggregates do not.
+
+    The motivating bug: at round one of a new season every season-scoped feature
+    was null, so every player received an identical vector and the model returned
+    the same 14.5 minutes and 5.2 points for a franchise scorer and a third-string
+    guard. A player who averaged 20 a game in May is not an unknown quantity in
+    October.
+
+    The risk in fixing it is that widening the window widens the leak surface, so
+    each test here pairs a "the past is now visible" assertion with a "the future
+    still is not" assertion.
+    """
+
+    async def _add_prior_season_game(
+        self,
+        session: AsyncSession,
+        *,
+        points: int,
+        tip_off: datetime,
+        observed_at: datetime,
+    ) -> None:
+        """Give Petrovic one game in the season before the fixture season."""
+        current = (
+            await session.execute(select(Season).where(Season.code == SEASON_CODE))
+        ).scalar_one()
+
+        prior = Season(
+            id=uuid.uuid4(),
+            league_id=current.league_id,
+            code="E2024",
+            name="Prior season",
+            start_year=current.start_year - 1,
+        )
+        session.add(prior)
+
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+        partizan = await _internal_id(session, EntityType.TEAM, "PAR")
+        madrid = await _internal_id(session, EntityType.TEAM, "MAD")
+
+        game = Game(
+            id=uuid.uuid4(),
+            season_id=prior.id,
+            game_code=901,
+            round_number=30,
+            tip_off_utc=tip_off,
+            status=GameStatus.FINISHED,
+            home_team_id=partizan,
+            away_team_id=madrid,
+            home_score=80,
+            away_score=75,
+            observed_at=observed_at,
+        )
+        session.add(game)
+
+        home = GameTeam(
+            id=uuid.uuid4(), game_id=game.id, team_id=partizan, side=TeamSide.HOME, score=80
+        )
+        away = GameTeam(
+            id=uuid.uuid4(), game_id=game.id, team_id=madrid, side=TeamSide.AWAY, score=75
+        )
+        session.add_all([home, away])
+
+        session.add(
+            PlayerGameStats(
+                id=uuid.uuid4(),
+                game_team_id=home.id,
+                player_id=player_id,
+                seconds_played=1800,
+                is_starter=True,
+                points=points,
+                fg2m=points // 2,
+                fg2a=points // 2 + 2,
+                total_rebounds=5,
+                assists=4,
+                observed_at=observed_at,
+            )
+        )
+        await session.flush()
+
+    async def test_last_season_counts_toward_the_rolling_window(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """A game from the previous May is part of "the last five games"."""
+        await _seed(session, fixture_provider, season)
+        await self._add_prior_season_game(
+            session,
+            points=40,
+            tip_off=datetime(2025, 5, 20, 18, 0, tzinfo=UTC),
+            observed_at=datetime(2025, 5, 20, 22, 0, tzinfo=UTC),
+        )
+
+        features = await _features(session, as_of=CUTOFF)
+
+        # Four current-season games (10, 12, 14, 16) plus one prior-season 40.
+        assert features["last5_points_mean"] == pytest.approx((10 + 12 + 14 + 16 + 40) / 5)
+        assert features["games_played_career_window"] == pytest.approx(5.0)
+
+        # ...while the season aggregate stays scoped to this season. Both
+        # quantities are legitimate and the model gets to see both.
+        assert features["season_points_mean"] == pytest.approx(13.0)
+        assert features["games_played_season"] == pytest.approx(4.0)
+
+        # And the mix feature says how much of the window is same-season, which
+        # is how the model learns when to trust which.
+        assert features["career_window_is_current_season"] == pytest.approx(0.8)
+
+    async def test_a_player_with_no_current_season_games_is_not_blank(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """The actual bug being fixed: round one is no longer a null vector."""
+        await _seed(session, fixture_provider, season)
+        await self._add_prior_season_game(
+            session,
+            points=40,
+            tip_off=datetime(2025, 5, 20, 18, 0, tzinfo=UTC),
+            observed_at=datetime(2025, 5, 20, 22, 0, tzinfo=UTC),
+        )
+
+        # Before any game of the new season has been played.
+        preseason = datetime(2025, 9, 15, 12, 0, tzinfo=UTC)
+        features = await _features(session, as_of=preseason)
+
+        assert features["games_played_season"] == pytest.approx(0.0)
+        assert features["season_points_mean"] is None
+
+        # Under v2 every one of these was None, which is precisely why every
+        # round-one projection came out identical.
+        assert features["last5_points_mean"] == pytest.approx(40.0)
+        assert features["ewma_points"] == pytest.approx(40.0)
+        assert features["career_window_is_current_season"] == pytest.approx(0.0)
+
+    async def test_widening_the_window_did_not_widen_the_leak(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """A prior-season game we had not yet recorded is still invisible.
+
+        Crossing seasons must not become an excuse to bypass ``observed_at``.
+        Here the game was played long before the cutoff but only entered our
+        database an hour after it, so it must not appear -- exactly as it would
+        not for a same-season game.
+        """
+        await _seed(session, fixture_provider, season)
+        await self._add_prior_season_game(
+            session,
+            points=40,
+            tip_off=datetime(2025, 5, 20, 18, 0, tzinfo=UTC),
+            observed_at=CUTOFF + timedelta(hours=1),
+        )
+
+        features = await _features(session, as_of=CUTOFF)
+        assert features["last5_points_mean"] == pytest.approx(13.0)
+        assert features["games_played_career_window"] == pytest.approx(4.0)
+
+        later = await _features(session, as_of=CUTOFF + timedelta(hours=2))
+        assert later["games_played_career_window"] == pytest.approx(5.0)
 
 
 class TestAvailabilityHistory:
@@ -374,6 +558,7 @@ class TestComposedFeatureSet:
             team_id=team_id,
             opponent_team_id=opponent_id,
             as_of=CUTOFF,
+            season_id=await _season_id(session),
             is_home=True,
         )
 
@@ -388,7 +573,11 @@ class TestComposedFeatureSet:
             assert marker in vector, f"missing family marker: {marker}"
 
         assert vector["season_points_mean"] == pytest.approx(13.0)
-        assert FEATURE_SET_VERSION == "v2"
+        assert FEATURE_SET_VERSION == "v3"
+
+        # v3 exposes how much of the rolling window is same-season. The fixture
+        # world is a single season, so it is entirely current.
+        assert vector["career_window_is_current_season"] == pytest.approx(1.0)
 
     async def test_the_whole_vector_is_leak_free(
         self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef

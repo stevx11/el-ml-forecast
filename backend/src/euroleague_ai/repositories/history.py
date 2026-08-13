@@ -42,6 +42,7 @@ class PlayerGameLine:
     """
 
     game_id: uuid.UUID
+    season_id: uuid.UUID
     tip_off_utc: datetime
     team_id: uuid.UUID
     opponent_team_id: uuid.UUID
@@ -131,6 +132,7 @@ class PlayerHistoryRepository:
             _observed_before(as_of)
             .add_columns(
                 Game.id,
+                Game.season_id,
                 Game.tip_off_utc,
                 GameTeam.team_id,
                 GameTeam.side,
@@ -153,6 +155,7 @@ class PlayerHistoryRepository:
         return [
             PlayerGameLine(
                 game_id=game_id,
+                season_id=season,
                 tip_off_utc=tip_off,
                 team_id=team_id,
                 opponent_team_id=opponent_team_id,
@@ -172,7 +175,7 @@ class PlayerHistoryRepository:
                 turnovers=stats.turnovers,
                 valuation=stats.valuation,
             )
-            for stats, game_id, tip_off, team_id, side, opponent_team_id in rows
+            for stats, game_id, season, tip_off, team_id, side, opponent_team_id in rows
         ]
 
     async def games_played_between(

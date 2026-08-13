@@ -9,7 +9,7 @@ Families:
 
 ===================  =========================================================
 ``form``             Rolling, weighted and trend statistics over the player's
-                     own prior box scores.
+                     own prior box scores, **crossing season boundaries**.
 ``role``             Starter status and per-40 usage rates.
 ``schedule``         Rest, congestion, recent load.
 ``team``             The player's team's ratings, pace and form.
@@ -33,7 +33,12 @@ from euroleague_ai.features.team_context import build_team_context_features
 #: Bump this whenever a feature's name, meaning or computation changes.
 #: Existing snapshots keep their old version and stay valid for the models
 #: trained on them.
-FEATURE_SET_VERSION = "v2"
+#:
+#: v3: rolling windows cross season boundaries. Same feature *names* as v2 but
+#: different *meaning* -- ``last5_points_mean`` now spans the summer break -- so
+#: v2 snapshots and v3 snapshots must never be mixed in one training set. That is
+#: exactly what this version string prevents.
+FEATURE_SET_VERSION = "v3"
 
 FEATURE_FAMILIES = ("form", "role", "schedule", "team", "opponent", "availability")
 
