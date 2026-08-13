@@ -258,6 +258,72 @@ def cmd_ingest_seasons(
     _report("seasons", _run(job))
 
 
+@features_app.command("backfill")
+def cmd_features_backfill(
+    start: Annotated[
+        int | None, typer.Option("--from", help="First season start year, e.g. 2016.")
+    ] = None,
+    end: Annotated[int | None, typer.Option("--to", help="Last season start year.")] = None,
+    min_round: Annotated[
+        int,
+        typer.Option(
+            "--min-round",
+            help="Skip rounds below this. Early-season form windows are empty, so "
+            "those rows teach the model about missingness rather than basketball.",
+        ),
+    ] = 4,
+    limit: Annotated[
+        int | None,
+        typer.Option("--limit", help="Stop after N games. Use for a smoke run first."),
+    ] = None,
+) -> None:
+    """Build feature snapshots across finished games.
+
+    This is the Phase 1 deliverable: roughly 100k training rows over ten seasons.
+    Resumable -- games already snapshotted at the current feature set version are
+    skipped, so interrupting and re-running is safe and cheap.
+
+    Start with a smoke run before committing to the full pass::
+
+        euroleague-ai features backfill --limit 20
+    """
+    from euroleague_ai.features.backfill import backfill_snapshots
+
+    codes: list[str] | None = None
+    if start is not None or end is not None:
+        first = start if start is not None else 2000
+        last = end if end is not None else 2025
+        codes = [f"E{year}" for year in range(first, last + 1)]
+
+    async def job() -> object:
+        settings = get_settings()
+        async with session_scope() as session:
+            return await backfill_snapshots(
+                session,
+                season_codes=codes,
+                min_round=min_round,
+                limit=limit,
+                settings=settings,
+            )
+
+    _report("snapshots", _run(job))
+
+
+@features_app.command("names")
+def cmd_feature_names() -> None:
+    """Print the feature vector's column names and count."""
+    from euroleague_ai.features.registry import FEATURE_SET_VERSION, feature_names
+
+    async def job() -> object:
+        async with session_scope() as session:
+            return await feature_names(session)
+
+    names = _run(job)
+    typer.echo(f"feature set {FEATURE_SET_VERSION}: {len(names)} features\n")
+    for name in names:
+        typer.echo(f"  {name}")
+
+
 @features_app.command("build")
 def cmd_build_features(
     season: SeasonOption = "",
@@ -273,7 +339,7 @@ def cmd_build_features(
     from sqlalchemy import select
 
     from euroleague_ai.features.snapshot import build_and_store_player_snapshot
-    from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats
+    from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats  # noqa: F401
 
     async def job() -> object:
         settings = get_settings()

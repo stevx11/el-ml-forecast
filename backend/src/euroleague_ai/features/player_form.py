@@ -1,14 +1,15 @@
-"""Player form features.
+"""Player form, role and schedule features.
 
-A deliberately small first slice: rolling and weighted averages over a player's
-own prior box scores, plus schedule context. It exists now, ahead of the rest of
-the feature catalogue, because it makes the leakage guarantee *demonstrable*
-rather than aspirational -- ``tests/integration/test_no_leakage.py`` exercises
-this builder against a fixture world containing deliberately extreme post-cutoff
-rows.
+Rolling, weighted and trend statistics over the player's own prior box scores,
+plus starter/usage rates and schedule congestion.
 
-The remaining families (role, team, opponent, availability, news) are specified
-in ``docs/ml-roadmap.md`` and slot in behind the same contract.
+One of six families composed by :mod:`euroleague_ai.features.registry`; the
+others cover team strength, opponent strength and teammate availability. News
+features are specified in ``docs/ml-roadmap.md`` phase 5.
+
+``tests/integration/test_no_leakage.py`` exercises this builder against a fixture
+world containing deliberately extreme post-cutoff rows, which is what makes the
+leakage guarantee demonstrable rather than aspirational.
 """
 
 from __future__ import annotations
@@ -26,7 +27,9 @@ from euroleague_ai.repositories.history import (
     TeamHistoryRepository,
 )
 
-FEATURE_SET_VERSION = "v1-player-form"
+#: Family-local tag. The authoritative feature set version is
+#: euroleague_ai.features.registry.FEATURE_SET_VERSION.
+FORM_FAMILY_VERSION = "v1-player-form"
 
 # Rolling window sizes. Long enough to be stable, short enough to react to a role
 # change -- EuroLeague rotations shift sharply, and a 20-game window alone would

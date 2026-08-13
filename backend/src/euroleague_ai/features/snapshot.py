@@ -16,10 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from euroleague_ai.core.clock import Clock, SystemClock, ensure_utc
 from euroleague_ai.core.config import Settings, get_settings
 from euroleague_ai.core.errors import NotFoundError
-from euroleague_ai.features.player_form import (
-    FEATURE_SET_VERSION,
-    build_player_form_features,
-)
+from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features
 from euroleague_ai.models.features import PlayerFeatureSnapshot
 from euroleague_ai.models.game import Game
 
@@ -83,12 +80,14 @@ async def build_and_store_player_snapshot(
     if existing is not None:
         return existing
 
-    features = await build_player_form_features(
+    features = await build_player_features(
         session,
         player_id=player_id,
         team_id=team_id,
+        opponent_team_id=opponent_team_id,
         as_of=cutoff,
         season_id=game.season_id,
+        is_home=team_id == game.home_team_id,
     )
 
     snapshot = PlayerFeatureSnapshot(

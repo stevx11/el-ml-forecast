@@ -28,7 +28,10 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from euroleague_ai.core.clock import FixedClock
+from euroleague_ai.features.availability import build_availability_features
 from euroleague_ai.features.player_form import build_player_form_features
+from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features
+from euroleague_ai.features.team_context import build_team_context_features
 from euroleague_ai.ingestion.jobs import ingest_all
 from euroleague_ai.models.availability import PlayerStatusEvent
 from euroleague_ai.models.enums import AvailabilityStatus, EntityType, StatusSourceType
@@ -249,6 +252,175 @@ class TestTransfersDoNotRewriteHistory:
 
         assert await repo.team_as_of(player_id, as_of=november) == partizan
         assert await repo.team_as_of(player_id, as_of=january) == baskonia
+
+
+class TestOpponentFeaturesRespectTheCutoff:
+    """The classic leak: reusing a season-long opponent rating for every game.
+
+    Computed once and applied everywhere, a team's season defensive rating
+    encodes March form into an October prediction. These tests assert the
+    ratings move as the cutoff moves, which they cannot do if they were
+    precomputed.
+    """
+
+    async def test_opponent_rating_uses_only_prior_games(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        await _seed(session, fixture_provider, season)
+
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+        team_id = await _internal_id(session, EntityType.TEAM, "PAR")
+        opponent_id = await _internal_id(session, EntityType.TEAM, "MAD")
+
+        early = await build_team_context_features(
+            session,
+            team_id=team_id,
+            opponent_team_id=opponent_id,
+            as_of=datetime(2025, 10, 11, 12, 0, tzinfo=UTC),
+        )
+        late = await build_team_context_features(
+            session, team_id=team_id, opponent_team_id=opponent_id, as_of=CUTOFF
+        )
+
+        # Real Madrid had played once by 11 October and twice by the cutoff.
+        assert early["opp_games_played"] == 1.0
+        assert late["opp_games_played"] == 2.0
+        assert player_id is not None  # sanity: fixture wiring resolved
+
+    async def test_ratings_ignore_games_after_the_cutoff(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """Game 6 is a 99-70 blowout a week after the target game."""
+        await _seed(session, fixture_provider, season)
+
+        team_id = await _internal_id(session, EntityType.TEAM, "PAR")
+        opponent_id = await _internal_id(session, EntityType.TEAM, "MAD")
+
+        at_cutoff = await build_team_context_features(
+            session, team_id=team_id, opponent_team_id=opponent_id, as_of=CUTOFF
+        )
+        after = await build_team_context_features(
+            session,
+            team_id=team_id,
+            opponent_team_id=opponent_id,
+            as_of=datetime(2025, 11, 30, tzinfo=UTC),
+        )
+
+        assert at_cutoff["team_games_played"] == 4.0
+        assert after["team_games_played"] == 5.0
+        assert at_cutoff["team_off_rating"] != after["team_off_rating"]
+
+    async def test_naive_cutoff_rejected(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        await _seed(session, fixture_provider, season)
+        team_id = await _internal_id(session, EntityType.TEAM, "PAR")
+        with pytest.raises(ValueError, match="timezone-aware"):
+            await build_team_context_features(
+                session,
+                team_id=team_id,
+                opponent_team_id=team_id,
+                as_of=datetime(2025, 10, 31, 17, 0),
+            )
+
+
+class TestAvailabilityProxyRespectsTheCutoff:
+    async def test_squad_is_read_only_from_prior_games(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """The proxy must not peek at who played in the game being predicted."""
+        await _seed(session, fixture_provider, season)
+
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+        team_id = await _internal_id(session, EntityType.TEAM, "PAR")
+
+        features = await build_availability_features(
+            session, player_id=player_id, team_id=team_id, as_of=CUTOFF
+        )
+        # Four Partizan games precede the cutoff; the window caps at five.
+        assert features["squad_games_observed"] == 4.0
+        assert features["player_played_last_game"] == 1.0
+
+    async def test_window_grows_only_as_time_passes(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        await _seed(session, fixture_provider, season)
+
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+        team_id = await _internal_id(session, EntityType.TEAM, "PAR")
+
+        early = await build_availability_features(
+            session,
+            player_id=player_id,
+            team_id=team_id,
+            as_of=datetime(2025, 10, 11, 12, 0, tzinfo=UTC),
+        )
+        assert early["squad_games_observed"] == 2.0
+
+
+class TestComposedFeatureSet:
+    async def test_v2_vector_contains_every_family(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        await _seed(session, fixture_provider, season)
+
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+        team_id = await _internal_id(session, EntityType.TEAM, "PAR")
+        opponent_id = await _internal_id(session, EntityType.TEAM, "MAD")
+
+        vector = await build_player_features(
+            session,
+            player_id=player_id,
+            team_id=team_id,
+            opponent_team_id=opponent_id,
+            as_of=CUTOFF,
+            is_home=True,
+        )
+
+        for marker in (
+            "season_points_mean",       # form
+            "starter_last_game",        # role
+            "days_rest",                # schedule
+            "team_off_rating",          # team
+            "opp_def_rating",           # opponent
+            "teammate_minutes_absent",  # availability
+        ):
+            assert marker in vector, f"missing family marker: {marker}"
+
+        assert vector["season_points_mean"] == pytest.approx(13.0)
+        assert FEATURE_SET_VERSION == "v2"
+
+    async def test_the_whole_vector_is_leak_free(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        """Composition must not reintroduce what the families each avoid.
+
+        Built at the cutoff and again after the 60-point blowout: any feature
+        that is identical across both either ignores time entirely or was
+        computed from data it should not have seen. Here we assert the opposite
+        direction -- the ones that *should* move, do.
+        """
+        await _seed(session, fixture_provider, season)
+
+        player_id = await _internal_id(session, EntityType.PLAYER, PLAYER_CODE)
+        team_id = await _internal_id(session, EntityType.TEAM, "PAR")
+        opponent_id = await _internal_id(session, EntityType.TEAM, "MAD")
+
+        kwargs = {
+            "player_id": player_id,
+            "team_id": team_id,
+            "opponent_team_id": opponent_id,
+            "is_home": True,
+        }
+        before = await build_player_features(session, as_of=CUTOFF, **kwargs)
+        after = await build_player_features(
+            session, as_of=datetime(2025, 11, 30, tzinfo=UTC), **kwargs
+        )
+
+        assert before["season_points_mean"] == pytest.approx(13.0)
+        assert after["season_points_mean"] == pytest.approx(22.4)
+        assert before["games_played_season"] == 4.0
+        assert after["games_played_season"] == 5.0
 
 
 class TestTheCutoffIsMandatory:
