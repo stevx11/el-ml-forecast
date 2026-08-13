@@ -52,21 +52,37 @@ and leaks anyway.
 
 Requires Docker and Docker Compose. Nothing else.
 
+**Windows (PowerShell)** — `make` is not available, so use the bundled script:
+
+```powershell
+Copy-Item .env.example .env
+
+.\make.ps1 up                        # build, start postgres + redis + api, migrate
+.\make.ps1 ingest -Season E2025      # pull a real season from the EuroLeague API
+```
+
+If PowerShell blocks the script, allow local scripts for this session:
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+**macOS / Linux:**
+
 ```bash
-git clone <your-remote> el-ml-predictor && cd el-ml-predictor
 cp .env.example .env
 
 make up                              # build, start postgres + redis + api, migrate
 make ingest SEASON=E2025             # pull a real season from the EuroLeague API
 ```
 
-Then:
+Then, on either platform:
 
 - API docs — <http://localhost:8000/docs>
 - Health — <http://localhost:8000/health/ready>
 - Games — <http://localhost:8000/api/v1/games?limit=10>
 
-Without `make`:
+**Raw Docker commands**, if you would rather not use either wrapper:
 
 ```bash
 docker compose up -d --build
@@ -74,7 +90,9 @@ docker compose exec backend alembic -c backend/alembic.ini upgrade head
 docker compose exec backend euroleague-ai ingest all --season E2025
 ```
 
-`make help` lists every target.
+`.\make.ps1 help` or `make help` lists every target. The two wrappers expose the
+same targets, so the rest of this README applies to both — read `make x` as
+`.\make.ps1 x` on Windows.
 
 ---
 
