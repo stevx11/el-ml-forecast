@@ -39,6 +39,16 @@ def _artifact_paths(root: Path, name: str, version: str) -> tuple[Path, Path]:
     return directory / "model.txt", directory / "columns.json"
 
 
+def distribution_path(model_path: Path) -> Path:
+    """Where the error distribution sits, beside its booster.
+
+    Travels with the artifact for the same reason the column order does: it
+    describes *this* model's errors, and pairing a new booster with an old
+    distribution would produce intervals that quietly no longer hold.
+    """
+    return model_path.parent / "distribution.json"
+
+
 def save_artifact(
     result: TrainingResult, *, name: str, version: str, root: Path | None = None
 ) -> Path:
@@ -63,6 +73,9 @@ def save_artifact(
             indent=2,
         ),
         encoding="utf-8",
+    )
+    distribution_path(model_path).write_text(
+        json.dumps(result.distribution.to_dict()), encoding="utf-8"
     )
     return model_path
 

@@ -6,7 +6,15 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Float, ForeignKey, Index, String, UniqueConstraint
+from sqlalchemy import (
+    CheckConstraint,
+    Float,
+    ForeignKey,
+    Index,
+    Numeric,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -70,6 +78,10 @@ class Prediction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         ),
         Index("ix_predictions_game_target", "game_id", "target"),
         Index("ix_predictions_player_ts", "player_id", "prediction_timestamp"),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)",
+            name="confidence_in_unit_interval",
+        ),
     )
 
     model_version_id: Mapped[uuid.UUID] = mapped_column(
@@ -110,6 +122,16 @@ class Prediction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
         JSONB,
         nullable=True,
         doc="Signed feature contributions plus their human-readable labels.",
+    )
+    confidence: Mapped[float | None] = mapped_column(
+        Numeric(4, 3),
+        nullable=True,
+        doc=(
+            "How tight this prediction is relative to a typical one, in (0, 1]. "
+            "Deliberately relative -- there is no absolute scale on which a "
+            "basketball projection is '90% confident'. Nullable because models "
+            "trained before the distribution work have nothing to report."
+        ),
     )
 
     prediction_timestamp: Mapped[datetime] = mapped_column(nullable=False, index=True)

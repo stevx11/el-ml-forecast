@@ -42,6 +42,8 @@ from euroleague_ai.core.config import Settings, get_settings
 from euroleague_ai.core.errors import NotFoundError
 from euroleague_ai.core.logging import get_logger
 from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features
+from euroleague_ai.ml.distribution import ResidualDistribution, thresholds_for
+from euroleague_ai.ml.registry import distribution_path
 from euroleague_ai.features.snapshot import default_prediction_timestamp
 from euroleague_ai.models.enums import GameStatus, PredictionTarget
 from euroleague_ai.models.features import PlayerFeatureSnapshot
@@ -67,6 +69,10 @@ class LoadedModel:
     feature_names: list[str]
     calibration_offset: float
     target: PredictionTarget
+    #: Held-out error distribution. ``None`` for models trained before item 06,
+    #: in which case predictions carry a point estimate only rather than a
+    #: fabricated interval.
+    distribution: ResidualDistribution | None = None
 
     def predict_batch(self, feature_dicts: list[dict[str, Any]]) -> list[float]:
         """Predict a whole squad at once, calibrated and clipped.
@@ -83,6 +89,32 @@ class LoadedModel:
         x = features_to_matrix(feature_dicts, self.feature_names)
         raw = self.booster.predict(x)
         return [max(0.0, float(value) + self.calibration_offset) for value in raw]
+
+    def distribution_for(
+        self, predicted: float, features: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Quantiles, threshold probabilities, spread and confidence.
+
+        Empty when the model predates the distribution work. Publishing an
+        interval we cannot justify would be worse than publishing none.
+        """
+        if self.distribution is None:
+            return {}
+
+        history = features.get("games_played_career_window")
+        return {
+            "quantiles": self.distribution.quantiles(predicted, history),
+            "threshold_probabilities": {
+                # Keys are strings because this lands in JSONB, where numeric
+                # keys would come back as strings anyway.
+                str(int(threshold)): self.distribution.probability_at_least(
+                    predicted, history, threshold
+                )
+                for threshold in thresholds_for(str(self.target))
+            },
+            "predicted_std": self.distribution.spread(predicted, history),
+            "confidence": self.distribution.confidence(predicted, history),
+        }
 
 
 def load_model(model_version: ModelVersion) -> LoadedModel:
@@ -106,12 +138,22 @@ def load_model(model_version: ModelVersion) -> LoadedModel:
     metadata = json.loads(columns_path.read_text(encoding="utf-8"))
     metrics = model_version.metrics or {}
 
+    # Optional on purpose: a model registered before item 06 has no
+    # distribution.json, and must keep loading and serving point estimates.
+    residuals: ResidualDistribution | None = None
+    dist_path = distribution_path(model_path)
+    if dist_path.is_file():
+        residuals = ResidualDistribution.from_dict(
+            json.loads(dist_path.read_text(encoding="utf-8"))
+        )
+
     return LoadedModel(
         model_version=model_version,
         booster=lgb.Booster(model_file=str(model_path)),
         feature_names=list(metadata["feature_names"]),
         calibration_offset=float(metrics.get("calibration_offset", 0.0)),
         target=model_version.target,
+        distribution=residuals,
     )
 
 
@@ -120,17 +162,45 @@ async def load_active_models(
 ) -> dict[PredictionTarget, LoadedModel]:
     """Load every active model for the requested targets, skipping missing ones."""
     loaded: dict[PredictionTarget, LoadedModel] = {}
+    stale: list[str] = []
     for target in targets:
         model_version = await active_model(session, target)
         if model_version is None:
             logger.warning("no active model", extra={"target": str(target)})
             continue
+
+        # A model may only be served the feature set it was trained on. Feature
+        # names are stable across versions while their *meaning* is not -- in v3
+        # ``last5_points_mean`` crosses the summer break and in v2 it did not --
+        # so a mismatch produces confident, silently wrong predictions rather
+        # than an error. Skip loudly instead.
+        if model_version.feature_set_version != FEATURE_SET_VERSION:
+            stale.append(
+                f"{target}: {model_version.name} {model_version.version} "
+                f"trained on {model_version.feature_set_version}"
+            )
+            logger.warning(
+                "active model trained on a different feature set; skipping",
+                extra={
+                    "target": str(target),
+                    "model_feature_set": model_version.feature_set_version,
+                    "current_feature_set": FEATURE_SET_VERSION,
+                },
+            )
+            continue
+
         try:
             loaded[target] = load_model(model_version)
         except NotFoundError as exc:
             logger.warning(
                 "model artifact missing", extra={"target": str(target), "error": str(exc)}
             )
+
+    if stale:
+        logger.warning(
+            "stale models skipped; retrain them",
+            extra={"stale": "; ".join(stale), "current_feature_set": FEATURE_SET_VERSION},
+        )
     return loaded
 
 
@@ -370,7 +440,8 @@ async def predict_game(
 
     for target, model in models.items():
         values = model.predict_batch(feature_dicts)
-        for (player_id, snapshot_id, _), value in zip(rows, values, strict=True):
+        for (player_id, snapshot_id, features), value in zip(rows, values, strict=True):
+            spread = model.distribution_for(value, features)
             await session.execute(
                 pg_insert(Prediction)
                 .values(
@@ -381,6 +452,10 @@ async def predict_game(
                     game_id=game.id,
                     target=target,
                     predicted_value=value,
+                    predicted_std=spread.get("predicted_std"),
+                    quantiles=spread.get("quantiles"),
+                    threshold_probabilities=spread.get("threshold_probabilities"),
+                    confidence=spread.get("confidence"),
                     prediction_timestamp=cutoff,
                 )
                 .on_conflict_do_update(
@@ -391,7 +466,15 @@ async def predict_game(
                         "target",
                         "prediction_timestamp",
                     ],
-                    set_={"predicted_value": value},
+                    set_={
+                        "predicted_value": value,
+                        "predicted_std": spread.get("predicted_std"),
+                        "quantiles": spread.get("quantiles"),
+                        "threshold_probabilities": spread.get(
+                            "threshold_probabilities"
+                        ),
+                        "confidence": spread.get("confidence"),
+                    },
                 )
             )
             written += 1

@@ -33,6 +33,11 @@ from euroleague_ai.core.logging import get_logger
 from euroleague_ai.models.enums import PredictionTarget
 from euroleague_ai.ml.baselines import default_baselines
 from euroleague_ai.ml.dataset import TrainingRow
+from euroleague_ai.ml.distribution import (
+    ResidualDistribution,
+    coverage_report,
+    fit_residual_distribution,
+)
 from euroleague_ai.ml.evaluation import Metrics, compute_metrics, stratified_metrics
 from euroleague_ai.ml.matrix import derive_feature_names, matrix_summary, to_matrix
 
@@ -40,6 +45,20 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     import lightgbm as lgb
 
 logger = get_logger(__name__)
+
+#: Seed for every stochastic part of training.
+#:
+#: ``bagging_fraction`` and ``feature_fraction`` sample rows and columns at every
+#: iteration. Left unseeded, two runs on byte-identical data produce different
+#: models -- which was not a theoretical concern here: model 0.1.0 and model
+#: 0.1.1 were trained on the same v2 snapshots against the same baselines, and
+#: the three-pointer MAE moved from 0.6823 to 0.7621. A 12% swing from nothing
+#: but the random number generator.
+#:
+#: That makes an unseeded gate meaningless. "Beats the baseline by 2.4%" is not a
+#: result if re-running the identical command can turn it into -4.6%, and every
+#: comparison between feature set versions is measuring noise. Pin it.
+TRAINING_SEED = 20_251_101
 
 #: Deliberately conservative. ~60k rows and ~200 features is a small dataset by
 #: gradient boosting standards, and EuroLeague rotations shift often enough that
@@ -59,6 +78,18 @@ DEFAULT_PARAMS: dict[str, Any] = {
     "lambda_l2": 1.0,
     "verbosity": -1,
     "num_threads": 0,
+    # LightGBM derives the individual seeds from ``seed``, but setting them
+    # explicitly means a future change to one cannot silently reshuffle another.
+    "seed": TRAINING_SEED,
+    "bagging_seed": TRAINING_SEED + 1,
+    "feature_fraction_seed": TRAINING_SEED + 2,
+    "data_random_seed": TRAINING_SEED + 3,
+    # Seeds alone are not enough: histogram construction is order-sensitive, so
+    # floating-point summation varies with thread scheduling. These two make the
+    # result reproducible on a fixed machine. ``deterministic`` requires one of
+    # the force_*_wise options to be set, or LightGBM warns and ignores it.
+    "deterministic": True,
+    "force_row_wise": True,
 }
 
 DEFAULT_NUM_ROUNDS = 2000
@@ -85,8 +116,18 @@ class TrainingResult:
     validation_rows: int
     test_rows: int
     metrics: Metrics
-    #: Additive offset that removes systematic bias. See :func:`calibration_offset`.
+    #: Additive offset, the MAE-minimising median residual. See
+    #: :func:`calibration_offset`.
     calibration_offset: float
+    #: Mean residual on validation. Diagnostic only -- never corrected away,
+    #: because doing so costs MAE in proportion to the target's skew.
+    validation_mean_residual: float
+    #: Held-out error distribution, fitted on validation. Turns the point
+    #: estimate into quantiles and threshold probabilities at serving time.
+    distribution: ResidualDistribution
+    #: Interval coverage on the test split. The gate for the distribution, in
+    #: the way MAE is the gate for the point estimate.
+    coverage: dict[str, float]
     #: Metrics before calibration, so the trade-off stays visible.
     raw_metrics: Metrics
     baseline_name: str
@@ -124,6 +165,9 @@ class TrainingResult:
             "r2": round(self.metrics.r2, 4),
             "bias": round(self.metrics.bias, 4),
             "calibration_offset": round(self.calibration_offset, 4),
+            "validation_mean_residual": round(self.validation_mean_residual, 4),
+            "coverage": self.coverage,
+            "distribution_rows": self.distribution.occupancy(),
             "uncalibrated_mae": round(self.raw_metrics.mae, 4),
             "uncalibrated_bias": round(self.raw_metrics.bias, 4),
             "best_iteration": self.best_iteration,
@@ -179,21 +223,63 @@ def chronological_split(
     )
 
 
+def _history_depths(rows: list[TrainingRow]) -> list[float | None]:
+    """Prior-game counts, used to condition the error distribution.
+
+    Read from the feature vector rather than recomputed, so it is exactly the
+    quantity the model saw -- and so it stays subject to the same ``as_of``
+    filtering as everything else.
+    """
+    return [row.features.get("games_played_career_window") for row in rows]
+
+
 def calibration_offset(predictions: Any, actuals: Any) -> float:
-    """Additive correction that removes systematic bias.
+    """Additive correction, chosen to minimise MAE rather than to zero the bias.
 
-    **Why this is needed.** The L1 objective minimises MAE, and MAE is minimised
-    by the *median*. Box score distributions are right-skewed, so the median sits
-    below the mean and the raw model under-predicts systematically -- measured at
-    -0.577 points against a mean of 7.55, a 7.6% shortfall. That is invisible in
-    MAE and very visible in a product that claims to project an expected line.
+    **This used to be the mean residual, and that was a serious mistake.**
 
-    The offset is the mean residual on the validation set. Adding it makes the
-    predictions unbiased on average at a small MAE cost, which is the right trade
-    for a number a human reads as an expectation.
+    The reasoning was: an L1 objective predicts the conditional *median*, box
+    score distributions are right-skewed, so the median sits below the mean and
+    the model under-predicts what a reader interprets as an expectation. Shifting
+    by the mean residual fixes that. The docstring called the MAE cost "small".
+
+    It was not small, and the numbers were in the training logs the whole time::
+
+        target      uncalibrated   calibrated   baseline   verdict
+        MINUTES         4.4381       4.4361      4.5452    unchanged
+        POINTS          3.9900       4.0463      4.1123    +2.97% -> +1.61%
+        REBOUNDS        1.5199       1.5402      1.5756    +3.53% -> +2.25%
+        ASSISTS         1.0764       1.1263      1.1329    +4.99% -> +0.58%
+        THREE_POINTERS  0.6813       0.7631      0.7335    +7.12% -> -4.04%
+
+    The correction cost the three-point model eleven percentage points and turned
+    a comfortable pass into a failure. Minutes was untouched because minutes are
+    roughly symmetric; the damage scaled with skew, which is exactly what theory
+    predicts. And the whole arrangement was incoherent: training deliberately
+    degraded MAE and the release gate then rejected the model for poor MAE.
+
+    So the offset is now the *median* residual, which is by construction the
+    additive constant that minimises MAE. For a well-fitted L1 model it is close
+    to zero -- the model is already median-unbiased -- so this is nearly a no-op,
+    which is the correct behaviour.
+
+    The underlying observation stands: a median is not an expectation, and a user
+    reading "5.2 points" wants one. The answer to that is a predicted
+    distribution, not a constant nudge that damages every metric we report.
 
     Computed on validation, never on test: fitting a correction on the data used
     to report accuracy would flatter the result.
+    """
+    import numpy as np
+
+    return float(np.median(np.asarray(actuals) - np.asarray(predictions)))
+
+
+def mean_residual(predictions: Any, actuals: Any) -> float:
+    """Mean residual, kept purely as a diagnostic.
+
+    This is what the old calibration corrected away. Reporting it keeps the
+    median-versus-mean gap visible without letting it distort the model.
     """
     import numpy as np
 
@@ -269,6 +355,23 @@ def train_target(
         x_validation, num_iteration=booster.best_iteration
     )
     offset = calibration_offset(validation_predictions, y_validation)
+    validation_mean_residual = mean_residual(validation_predictions, y_validation)
+
+    # The median residual minimises MAE over additive constants, but predictions
+    # are clipped at zero afterwards, which breaks that guarantee at the low end.
+    # Check on validation and drop the offset if it does not actually help.
+    def _validation_mae(shift: float) -> float:
+        return sum(
+            abs(max(0.0, float(p) + shift) - float(a))
+            for p, a in zip(validation_predictions, y_validation, strict=True)
+        ) / max(1, len(y_validation))
+
+    if _validation_mae(offset) > _validation_mae(0.0):
+        logger.info(
+            "calibration offset rejected; it did not improve validation MAE",
+            extra={"target": str(target), "rejected_offset": round(offset, 4)},
+        )
+        offset = 0.0
 
     raw_predictions = booster.predict(x_test, num_iteration=booster.best_iteration)
     raw_metrics = compute_metrics(
@@ -280,6 +383,22 @@ def train_target(
     predictions = [max(0.0, float(p) + offset) for p in raw_predictions]
     pairs = [(p, float(a)) for p, a in zip(predictions, y_test, strict=True)]
     metrics = compute_metrics(pairs, total_rows=len(test_rows))
+
+    # The error distribution is fitted on the numbers we actually serve -- after
+    # the offset and the clip -- because those are the predictions whose error we
+    # need to characterise. Fitting on the raw booster output would describe a
+    # model nobody sees.
+    calibrated_validation = [max(0.0, float(p) + offset) for p in validation_predictions]
+    validation_history = _history_depths(validation_rows)
+    distribution = fit_residual_distribution(
+        calibrated_validation, [float(a) for a in y_validation], validation_history
+    )
+    coverage = coverage_report(
+        distribution,
+        predictions,
+        [float(a) for a in y_test],
+        _history_depths(test_rows),
+    )
 
     baseline_name, baseline_metrics = _best_baseline(test_rows, target)
 
@@ -302,6 +421,9 @@ def train_target(
         test_rows=len(test_rows),
         metrics=metrics,
         calibration_offset=offset,
+        validation_mean_residual=validation_mean_residual,
+        distribution=distribution,
+        coverage=coverage,
         raw_metrics=raw_metrics,
         baseline_name=baseline_name,
         baseline_metrics=baseline_metrics,

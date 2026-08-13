@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Annotated, TypeVar
+from typing import Annotated, Any, TypeVar
 
 import typer
 
@@ -272,10 +272,11 @@ def cmd_features_backfill(
         int,
         typer.Option(
             "--min-round",
-            help="Skip rounds below this. Early-season form windows are empty, so "
-            "those rows teach the model about missingness rather than basketball.",
+            help="Skip rounds below this. Since feature set v3 the form windows "
+            "cross season boundaries, so early rounds carry real signal and are "
+            "kept by default. Mirrors features.backfill.DEFAULT_MIN_ROUND.",
         ),
-    ] = 4,
+    ] = 1,
     limit: Annotated[
         int | None,
         typer.Option("--limit", help="Stop after N games. Use for a smoke run first."),
@@ -757,6 +758,37 @@ def cmd_ml_train(
                 bold=True,
             )
 
+        coverage = (block.get("summary") or {}).get("coverage")
+        if coverage:
+            # Coverage is to an interval what MAE is to a point estimate. An 80%
+            # interval that holds 62% of outcomes is not an interval.
+            covered = float(coverage.get("covered_80", 0.0))
+            drift = covered - 0.80
+            typer.secho(
+                f"    80% interval  {covered:.1%} covered  "
+                f"({drift:+.1%} vs nominal, "
+                f"{float(coverage.get('below_interval', 0.0)):.1%} below / "
+                f"{float(coverage.get('above_interval', 0.0)):.1%} above)",
+                fg=typer.colors.GREEN if abs(drift) <= 0.05 else typer.colors.YELLOW,
+            )
+
+        occupancy = (block.get("summary") or {}).get("distribution_rows") or {}
+        if occupancy:
+            debuts = occupancy.get("history_0", 0)
+            typer.secho(
+                f"    distribution   {occupancy.get('total', 0):,} residuals, "
+                f"{debuts:,} from players with no prior games",
+                fg=typer.colors.YELLOW if debuts < 50 else None,
+            )
+            if debuts < 50:
+                # Below the marginal threshold the unknown-player bucket falls
+                # back to the pooled sample, and confidence stops discriminating.
+                typer.secho(
+                    "      too few to characterise unknown players; their "
+                    "confidence will match everyone else's",
+                    fg=typer.colors.YELLOW,
+                )
+
         typer.echo(f"    top features: " + ", ".join(n for n, _ in block["top_features"][:5]))
         typer.echo(f"    artifact:     {block['model']['artifact']}")
 
@@ -782,6 +814,8 @@ def cmd_ml_models() -> None:
                     "version": m.version,
                     "target": str(m.target),
                     "active": m.is_active,
+                    "features": m.feature_set_version,
+                    "rows": ((m.metrics or {}).get("rows") or {}).get("train"),
                     "mae": (m.metrics or {}).get("model_mae"),
                     "baseline_mae": (m.metrics or {}).get("baseline_mae"),
                     "improvement": (m.metrics or {}).get("improvement_pct"),
@@ -796,13 +830,16 @@ def cmd_ml_models() -> None:
         return
 
     typer.echo("")
-    typer.echo(f"  {'name':<22}{'ver':<8}{'MAE':>9}{'base':>9}{'impr%':>8}  active")
+    typer.echo(
+        f"  {'name':<22}{'ver':<8}{'feat':<6}{'MAE':>9}{'base':>9}{'impr%':>8}  active"
+    )
     for m in models:  # type: ignore[union-attr]
         mae = m["mae"] if m["mae"] is not None else float("nan")
         base = m["baseline_mae"] if m["baseline_mae"] is not None else float("nan")
         impr = m["improvement"] if m["improvement"] is not None else float("nan")
         typer.secho(
-            f"  {m['name']:<22}{m['version']:<8}{mae:>9.4f}{base:>9.4f}{impr:>8.2f}"
+            f"  {m['name']:<22}{m['version']:<8}{m['features']:<6}"
+            f"{mae:>9.4f}{base:>9.4f}{impr:>8.2f}"
             f"  {'yes' if m['active'] else 'no'}",
             fg=typer.colors.GREEN if m["active"] else None,
         )
@@ -868,7 +905,7 @@ def cmd_ml_show(
     from euroleague_ai.models.competition import Season
     from euroleague_ai.models.game import Game
     from euroleague_ai.models.people import Player
-    from euroleague_ai.models.prediction import Prediction
+    from euroleague_ai.models.prediction import ModelVersion, Prediction
 
     async def job() -> object:
         async with session_scope() as session:
@@ -885,17 +922,49 @@ def cmd_ml_show(
                     f"game {game_code} not found in season {season_code}"
                 )
 
+            # Only the current view. Predictions are append-only by design --
+            # a projection made before a transfer is a legitimate historical
+            # record and must not be deleted -- so the filtering belongs here,
+            # at the point of display, not in the writer.
+            #
+            # Without this, `show` unioned every model version ever run against
+            # the game, and a player who has since been reconciled off the
+            # roster kept appearing with the numbers some superseded model gave
+            # him. Two such ghosts (a transferred guard and a released big) sat
+            # in this output looking exactly like a live projection.
             rows = (
                 await session.execute(
-                    select(Player.full_name, Prediction.target, Prediction.predicted_value)
+                    select(
+                        Player.full_name,
+                        Prediction.target,
+                        Prediction.predicted_value,
+                        Prediction.quantiles,
+                        Prediction.threshold_probabilities,
+                        Prediction.confidence,
+                    )
                     .join(Player, Player.id == Prediction.player_id)
-                    .where(Prediction.game_id == game.id)
+                    .join(ModelVersion, ModelVersion.id == Prediction.model_version_id)
+                    .where(
+                        Prediction.game_id == game.id,
+                        ModelVersion.is_active.is_(True),
+                    )
                 )
             ).all()
 
-            by_player: dict[str, dict[str, float]] = {}
-            for full_name, target, value in rows:
-                by_player.setdefault(full_name, {})[str(target)] = float(value)
+            by_player: dict[str, dict[str, Any]] = {}
+            for full_name, target, value, quantiles, thresholds, confidence in rows:
+                entry = by_player.setdefault(full_name, {})
+                entry[str(target)] = float(value)
+                # str() explicitly: PredictionTarget is a StrEnum today, but
+                # relying on f-string formatting of an enum is the kind of thing
+                # that silently changes key names if the base class ever does.
+                entry[f"{str(target)}_q"] = quantiles
+                entry[f"{str(target)}_p"] = thresholds
+                if confidence is not None:
+                    # One confidence per player, not per target. Minutes drives
+                    # every other line, so its spread is the honest summary.
+                    if str(target) == "MINUTES" or "confidence" not in entry:
+                        entry["confidence"] = float(confidence)
             return {"tip_off": game.tip_off_utc.isoformat(), "players": by_player}
 
     data = _run(job)
@@ -907,12 +976,38 @@ def cmd_ml_show(
     order = ["MINUTES", "POINTS", "REBOUNDS", "ASSISTS", "THREE_POINTERS_MADE"]
     typer.echo("")
     typer.secho(f"  tip-off {data['tip_off']}", bold=True)  # type: ignore[index]
-    typer.echo(f"  {'player':<28}{'MIN':>7}{'PTS':>7}{'REB':>7}{'AST':>7}{'3PM':>7}")
+    typer.echo(
+        f"  {'player':<28}{'MIN':>7}{'PTS':>7}{'REB':>7}{'AST':>7}{'3PM':>7}"
+        f"{'conf':>7}   pts 10/15/20/25"
+    )
     for name, values in sorted(
         players.items(), key=lambda kv: -kv[1].get("MINUTES", 0.0)
     ):
         cells = "".join(f"{values.get(t, float('nan')):>7.1f}" for t in order)
-        typer.echo(f"  {name:<28}{cells}")
+
+        confidence = values.get("confidence")
+        conf_cell = "      -" if confidence is None else f"{confidence:>7.2f}"
+
+        # Threshold probabilities are the point of the whole exercise: "will he
+        # go for twenty" is the question, not "what is his mean".
+        probabilities = values.get("POINTS_p") or {}
+        odds = (
+            "  ".join(
+                f"{int(round(float(probabilities[key]) * 100)):>2}%"
+                for key in ("10", "15", "20", "25")
+                if key in probabilities
+            )
+            or "-"
+        )
+        typer.echo(f"  {name:<28}{cells}{conf_cell}   {odds}")
+
+    if not any(v.get("POINTS_q") for v in players.values()):
+        typer.secho(
+            "\n  No distributions stored. These predictions came from a model\n"
+            "  trained before feature set v3 + item 06. Retrain and re-predict:\n"
+            "    euroleague-ai ml train && euroleague-ai ml predict --days 60",
+            fg=typer.colors.YELLOW,
+        )
 
 
 @ml_app.command("roster")
