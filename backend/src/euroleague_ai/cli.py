@@ -1010,6 +1010,133 @@ def cmd_ml_show(
         )
 
 
+@ml_app.command("score")
+def cmd_ml_score(
+    season: SeasonOption = "",
+    game_code: Annotated[
+        list[int] | None,
+        typer.Option("--game-code", "-g", help="Specific games. Repeatable."),
+    ] = None,
+    rescore: Annotated[
+        bool,
+        typer.Option("--rescore", help="Recompute outcomes that already exist."),
+    ] = False,
+) -> None:
+    """Join realised box scores onto published predictions.
+
+    Idempotent, so it is safe to run on a schedule: predictions that already
+    carry an outcome are skipped unless --rescore is passed.
+
+    Run it after ingesting a round's stats. Until this runs, the system has no
+    idea whether anything it published was any good.
+    """
+    from euroleague_ai.ml.outcomes import score_predictions
+
+    async def job() -> object:
+        async with session_scope() as session:
+            result = await score_predictions(
+                session,
+                season_code=season or None,
+                game_codes=list(game_code) if game_code else None,
+                rescore=rescore,
+            )
+            return result.as_dict()
+
+    result = _run(job)
+    typer.echo("")
+    typer.secho(
+        f"  {result['predictions_scored']:,} scored across "  # type: ignore[index]
+        f"{result['games']} finished game(s)",  # type: ignore[index]
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+    if result["already_scored"]:  # type: ignore[index]
+        typer.echo(f"    {result['already_scored']:,} already had outcomes")  # type: ignore[index]
+    if result["did_not_appear"]:  # type: ignore[index]
+        typer.secho(
+            f"    {result['did_not_appear']:,} for players who never took the floor "  # type: ignore[index]
+            "(scored zero, excluded from MAE by default)",
+            fg=typer.colors.YELLOW,
+        )
+    for target, count in (result.get("targets") or {}).items():  # type: ignore[union-attr]
+        typer.echo(f"    {target:<24}{count:>8,}")
+
+
+@ml_app.command("accuracy")
+def cmd_ml_accuracy(
+    season: SeasonOption = "",
+    include_absent: Annotated[
+        bool,
+        typer.Option(
+            "--include-absent",
+            help="Fold non-appearances into the error figures.",
+        ),
+    ] = False,
+) -> None:
+    """Realised accuracy and calibration on games that have been played.
+
+    This is the only measurement that is not computed from the same pipeline as
+    the model, which is what makes it worth more than the training report.
+    """
+    from euroleague_ai.ml.outcomes import accuracy_report, unscored_games
+
+    async def job() -> object:
+        async with session_scope() as session:
+            report = await accuracy_report(
+                session,
+                season_code=season or None,
+                include_absent=include_absent,
+            )
+            report["unscored_games"] = await unscored_games(
+                session, season_code=season or None
+            )
+            return report
+
+    report = _run(job)
+    targets = report.get("targets") or {}  # type: ignore[union-attr]
+    if not targets:
+        typer.secho(
+            "  Nothing scored yet. Ingest a played round, then:\n"
+            "    euroleague-ai ml score",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    typer.echo("")
+    typer.secho(f"  Realised accuracy - season {report['season']}", bold=True)  # type: ignore[index]
+    typer.echo(f"  {'target':<24}{'n':>7}{'MAE':>9}{'bias':>9}{'80% int':>10}")
+    for target, block in targets.items():
+        interval = block.get("interval") or {}
+        covered = interval.get("covered_80")
+        cell = "        -" if covered is None else f"{covered:>9.1%}"
+        typer.echo(
+            f"  {target:<24}{block['scored']:>7,}{block['mae']:>9.4f}"
+            f"{block['bias']:>+9.3f}{cell}"
+        )
+
+    bands = report.get("thresholds") or []  # type: ignore[union-attr]
+    if bands:
+        typer.echo("")
+        typer.secho("  Threshold calibration", bold=True)
+        typer.echo(f"  {'stated':<12}{'n':>8}{'realised':>11}{'drift':>9}")
+        for band in bands:
+            realised = band["realised"]
+            drift = realised - band["expected"]
+            typer.secho(
+                f"  {band['band']:<12}{band['predictions']:>8,}{realised:>11.1%}"
+                f"{drift:>+9.1%}",
+                fg=typer.colors.YELLOW if abs(drift) > 0.1 else None,
+            )
+
+    outstanding = report.get("unscored_games") or 0  # type: ignore[union-attr]
+    if outstanding:
+        typer.secho(
+            f"\n  {outstanding} finished game(s) still unscored - run "
+            "`euroleague-ai ml score`",
+            fg=typer.colors.YELLOW,
+        )
+
+
 @ml_app.command("why")
 def cmd_ml_why(
     game_code: Annotated[int, typer.Option("--game-code", "-g")],

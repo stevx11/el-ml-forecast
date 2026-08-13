@@ -91,7 +91,7 @@ class TrainingRow:
     actual_minutes: float
 
 
-def _target_value(target: PredictionTarget, stats_value: int) -> float:
+def target_value(target: PredictionTarget, stats_value: int) -> float:
     """Convert the stored column value into the target's natural unit."""
     if target is PredictionTarget.MINUTES:
         return stats_value / 60.0
@@ -173,7 +173,7 @@ async def load_training_rows(
             tip_off_utc=row[5],
             prediction_timestamp=row[6],
             features=row[7] or {},
-            target=_target_value(target, row[8]),
+            target=target_value(target, row[8]),
             actual_minutes=row[9] / 60.0,
         )
         for row in rows

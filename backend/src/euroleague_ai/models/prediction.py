@@ -162,5 +162,17 @@ class PredictionOutcome(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     absolute_error: Mapped[float] = mapped_column(Float, nullable=False)
     squared_error: Mapped[float] = mapped_column(Float, nullable=False)
     evaluated_at: Mapped[datetime] = mapped_column(nullable=False)
+    did_not_appear: Mapped[bool] = mapped_column(
+        default=False,
+        nullable=False,
+        doc=(
+            "The player did not take the floor: either absent from the squad "
+            "entirely, or dressed and never used. Scored as zero, but flagged, "
+            "because it is an availability miss rather than a statistical one. "
+            "Folding these into MAE would blame the points model for a coach's "
+            "rotation decision; hiding them would flatter a projection we did "
+            "publish. Recording both keeps either analysis available."
+        ),
+    )
 
     prediction: Mapped[Prediction] = relationship(back_populates="outcome")
