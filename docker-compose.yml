@@ -77,6 +77,37 @@ services:
       retries: 5
       start_period: 20s
 
+  # Optional. Not started by `docker compose up` -- bring it up deliberately
+  # with `docker compose --profile scheduler up -d scheduler`, because an
+  # unattended job that starts itself on every developer's laptop and quietly
+  # hammers the upstream API is not a good default.
+  scheduler:
+    profiles: ["scheduler"]
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-euroleague}:${POSTGRES_PASSWORD:-euroleague}@postgres:5432/${POSTGRES_DB:-euroleague}
+      REDIS_URL: redis://redis:6379/0
+    volumes:
+      - ./backend:/app/backend
+      - ./data:/app/data
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    # Restarts on crash and on daemon start. The loop holds no state between
+    # runs and every run is idempotent, so a restart costs at most a repeat of
+    # work that was already safe to repeat.
+    restart: unless-stopped
+    command:
+      - euroleague-ai
+      - pipeline
+      - serve
+
 volumes:
   postgres_data:
   redis_data:

@@ -39,12 +39,14 @@ news_app = typer.Typer(help="News collection", no_args_is_help=True)
 quality_app = typer.Typer(help="Data quality", no_args_is_help=True)
 ml_app = typer.Typer(help="Datasets, baselines, evaluation", no_args_is_help=True)
 maintenance_app = typer.Typer(help="Data repair", no_args_is_help=True)
+pipeline_app = typer.Typer(help="Scheduled end-to-end runs", no_args_is_help=True)
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(features_app, name="features")
 app.add_typer(news_app, name="news")
 app.add_typer(quality_app, name="quality")
 app.add_typer(ml_app, name="ml")
 app.add_typer(maintenance_app, name="maintenance")
+app.add_typer(pipeline_app, name="pipeline")
 
 T = TypeVar("T")
 
@@ -464,6 +466,192 @@ def cmd_quality_check() -> None:
     else:
         typer.secho(f"FAIL - {summary}", fg=typer.colors.RED, bold=True)
         raise typer.Exit(code=1)
+
+
+def _print_pipeline(result: dict[str, object]) -> None:
+    """Render one pipeline run."""
+    if result.get("skipped"):
+        typer.secho(
+            "  Another run holds the lock; this slot was skipped.",
+            fg=typer.colors.YELLOW,
+        )
+        return
+
+    typer.echo("")
+    for step in result.get("steps") or []:  # type: ignore[union-attr]
+        if step["ok"]:
+            typer.secho(f"  OK    {step['name']}", fg=typer.colors.GREEN)
+            for key, value in (step.get("detail") or {}).items():
+                if isinstance(value, dict):
+                    continue
+                typer.echo(f"          {key:<22}{value}")
+        else:
+            typer.secho(f"  FAIL  {step['name']}: {step['error']}", fg=typer.colors.RED)
+
+    if result.get("ok"):
+        typer.secho("\n  Run completed.", fg=typer.colors.GREEN, bold=True)
+    else:
+        typer.secho(
+            "\n  Run completed with failures - recorded in ingestion_runs.",
+            fg=typer.colors.YELLOW,
+            bold=True,
+        )
+
+
+@pipeline_app.command("run")
+def cmd_pipeline_run(
+    season: SeasonOption = "",
+    days: Annotated[
+        int, typer.Option("--days", "-d", help="Project fixtures within this many days.")
+    ] = 0,
+    skip_ingest: Annotated[
+        bool,
+        typer.Option("--skip-ingest", help="Score and predict from data already held."),
+    ] = False,
+) -> None:
+    """Run ingest, then score, then predict, once.
+
+    Ingest first so box scores exist to score against; score before predicting
+    so a run that dies partway through has still recorded how yesterday went --
+    the one part that cannot be recovered from upstream later.
+
+    Safe to re-run: every step is idempotent, and a Postgres advisory lock stops
+    two runs overlapping.
+    """
+    from euroleague_ai.scheduling.runner import run_daily
+
+    settings = get_settings()
+
+    async def job() -> object:
+        async with session_scope() as session:
+            result = await run_daily(
+                session,
+                season_code=season or None,
+                within_days=days or settings.pipeline_within_days,
+                skip_ingest=skip_ingest,
+            )
+            return result.as_dict()
+
+    result = _run(job)
+    _print_pipeline(result)  # type: ignore[arg-type]
+    if not result.get("ok") and not result.get("skipped"):  # type: ignore[union-attr]
+        raise typer.Exit(code=1)
+
+
+@pipeline_app.command("serve")
+def cmd_pipeline_serve(
+    season: SeasonOption = "",
+    at: Annotated[
+        str,
+        typer.Option("--at", help='UTC run times, e.g. "06:00,16:00". Default: config.'),
+    ] = "",
+    once: Annotated[
+        bool,
+        typer.Option("--once", help="Wait for the next slot, run, then exit."),
+    ] = False,
+) -> None:
+    """Run the pipeline on a schedule, forever.
+
+    A loop and a sleep, not a task queue. The work is one job twice a day
+    against one database; a broker, a result backend and a worker pool would add
+    failure modes rather than remove them.
+
+    Intended as a long-running container. Restart-safe: it holds no state
+    between runs, and every run records itself in ingestion_runs.
+    """
+    import asyncio
+
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.scheduling.runner import run_daily
+    from euroleague_ai.scheduling.schedule import (
+        next_run_at,
+        parse_run_times,
+        seconds_until,
+    )
+
+    settings = get_settings()
+    try:
+        run_times = parse_run_times(at or settings.pipeline_run_at)
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+    clock = SystemClock()
+    typer.secho(
+        "  Scheduler started. Run times (UTC): "
+        + ", ".join(t.strftime("%H:%M") for t in run_times),
+        fg=typer.colors.GREEN,
+        bold=True,
+    )
+
+    async def loop() -> None:
+        while True:
+            target = next_run_at(clock.now(), run_times)
+            delay = seconds_until(clock.now(), target)
+            typer.echo(f"  next run {target:%Y-%m-%d %H:%M} UTC (in {delay / 60:.0f} min)")
+            await asyncio.sleep(delay)
+
+            async with session_scope() as session:
+                result = await run_daily(
+                    session,
+                    season_code=season or None,
+                    within_days=settings.pipeline_within_days,
+                )
+            _print_pipeline(result.as_dict())
+
+            if once:
+                return
+            # A run finishing inside its own minute would otherwise re-enter the
+            # same slot; next_run_at is strictly-after, so a second is enough.
+            await asyncio.sleep(1)
+
+    try:
+        asyncio.run(loop())
+    except KeyboardInterrupt:
+        typer.echo("\n  Scheduler stopped.")
+
+
+@pipeline_app.command("history")
+def cmd_pipeline_history(
+    limit: Annotated[int, typer.Option("--limit", "-n")] = 10,
+) -> None:
+    """Recent scheduled runs and how they went.
+
+    The point of an unattended job is that nobody watches it, which is exactly
+    why it needs a trail that can be read afterwards.
+    """
+    from euroleague_ai.scheduling.runner import recent_runs
+
+    async def job() -> object:
+        async with session_scope() as session:
+            runs = await recent_runs(session, limit=limit)
+            return [
+                {
+                    "started": r.started_at.isoformat(timespec="minutes"),
+                    "status": str(r.status),
+                    "season": r.season_code,
+                    "error": r.error_message,
+                    "steps": (r.details or {}).get("steps") or [],
+                }
+                for r in runs
+            ]
+
+    runs = _run(job)
+    if not runs:  # type: ignore[truthy-bool]
+        typer.echo("no scheduled runs yet - try `euroleague-ai pipeline run`")
+        return
+
+    typer.echo("")
+    typer.echo(f"  {'started (UTC)':<20}{'status':<10}{'steps':<28}season")
+    for run in runs:  # type: ignore[union-attr]
+        marks = " ".join(
+            f"{s['name']}{'+' if s['ok'] else '!'}" for s in run["steps"]
+        )
+        typer.secho(
+            f"  {run['started']:<20}{run['status']:<10}{marks:<28}{run['season'] or ''}",
+            fg=typer.colors.RED if run["status"] == "FAILED" else None,
+        )
+        if run["error"]:
+            typer.secho(f"      {run['error']}", fg=typer.colors.RED)
 
 
 @ml_app.command("baselines")

@@ -88,6 +88,19 @@ class Settings(BaseSettings):
     euroleague_max_retry_wait_seconds: Annotated[float, Field(ge=0)] = 60.0
     euroleague_user_agent: str = "euroleague-ai/0.1"
 
+    # -- Scheduled pipeline -----------------------------------------------
+    #: UTC times of day to run ingest -> score -> predict, comma separated.
+    #: UTC throughout: the project stores every timestamp as UTC, and a local
+    #: timezone here would add a daylight-saving discontinuity to the one
+    #: component whose whole job is knowing what time it is.
+    #:
+    #: Two slots by default. EuroLeague plays Tuesday to Friday with late
+    #: tip-offs, so the morning run picks up last night's box scores and the
+    #: afternoon run refreshes projections after the day's team news.
+    pipeline_run_at: str = "06:00,16:00"
+    #: How far ahead each scheduled run projects.
+    pipeline_within_days: Annotated[int, Field(ge=1, le=60)] = 7
+
     data_provider: Literal["euroleague", "fixture"] = "euroleague"
 
     # -- Prediction policy -------------------------------------------------
