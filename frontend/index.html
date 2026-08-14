@@ -1,0 +1,86 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>EuroLeague AI — projections</title>
+<meta name="description" content="Pre-game EuroLeague player projections with distributions, threshold probabilities and reasons." />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="stylesheet" href="./styles.css" />
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>&#127936;</text></svg>" />
+</head>
+<body>
+  <a class="skip" href="#main">Skip to content</a>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <div>
+        <span class="brand-name">EuroLeague<strong>AI</strong></span>
+        <span class="brand-sub">pre-game projections</span>
+      </div>
+    </div>
+
+    <nav class="tabs" role="tablist" aria-label="Views">
+      <button class="tab" role="tab" data-view="fixtures" aria-selected="true">Fixtures</button>
+      <button class="tab" role="tab" data-view="accuracy" aria-selected="false">Accuracy</button>
+    </nav>
+
+    <div class="topbar-right">
+      <label class="field">
+        <span class="field-label">Season</span>
+        <select id="season-select" aria-label="Season"></select>
+      </label>
+      <div id="status-pill" class="pill" title="Loading system status">…</div>
+    </div>
+  </header>
+
+  <main id="main">
+    <!-- Fixtures -->
+    <section id="view-fixtures" class="view" aria-label="Fixtures">
+      <div class="layout">
+        <aside class="rail" aria-label="Fixture list">
+          <div class="rail-head">
+            <h2>Fixtures</h2>
+            <label class="field compact">
+              <span class="field-label">Window</span>
+              <select id="window-select" aria-label="Days ahead">
+                <option value="7">7 days</option>
+                <option value="14" selected>14 days</option>
+                <option value="30">30 days</option>
+                <option value="90">90 days</option>
+                <option value="365">Whole season</option>
+              </select>
+            </label>
+          </div>
+          <div id="fixture-list" class="fixture-list" role="list"></div>
+        </aside>
+
+        <section class="panel" aria-live="polite" aria-label="Projections">
+          <div id="game-panel"></div>
+        </section>
+      </div>
+    </section>
+
+    <!-- Accuracy -->
+    <section id="view-accuracy" class="view" hidden aria-label="Accuracy">
+      <div id="accuracy-panel" class="panel wide"></div>
+    </section>
+  </main>
+
+  <!-- Player detail -->
+  <div id="drawer-scrim" class="scrim" hidden></div>
+  <aside id="drawer" class="drawer" hidden role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+    <header class="drawer-head">
+      <div>
+        <h3 id="drawer-title">Player</h3>
+        <p id="drawer-sub" class="muted"></p>
+      </div>
+      <button id="drawer-close" class="icon-btn" aria-label="Close">&times;</button>
+    </header>
+    <div id="drawer-body" class="drawer-body"></div>
+  </aside>
+
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

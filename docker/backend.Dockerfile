@@ -47,6 +47,8 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=appuser:appuser pyproject.toml README.md LICENSE ./
 COPY --chown=appuser:appuser backend ./backend
+# Three static files, served by the API itself. No node image, no bundler.
+COPY --chown=appuser:appuser frontend ./frontend
 
 # Never run as root.
 USER appuser

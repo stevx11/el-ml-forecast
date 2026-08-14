@@ -72,8 +72,44 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(api_router, prefix=resolved.api_v1_prefix)
+    _mount_frontend(app)
 
     return app
+
+
+def _mount_frontend(app: FastAPI) -> None:
+    """Serve the web client from the API container, if it is present.
+
+    No build step and no second service. The client is three static files, so
+    handing them to the process that already serves the data removes a whole
+    deployment: no node image, no bundler, no CORS between them, and nothing
+    that can drift out of sync with the API it talks to.
+
+    Mounted last so it cannot shadow ``/api``, ``/docs`` or ``/health``, and
+    skipped silently when the directory is absent -- an API-only deployment is a
+    perfectly reasonable way to run this.
+    """
+    from pathlib import Path
+
+    from fastapi.staticfiles import StaticFiles
+
+    # Two candidates: the repo layout (frontend/ beside backend/) and the
+    # container layout, where it is copied to /app/frontend.
+    here = Path(__file__).resolve()
+    candidates = [
+        here.parents[3] / "frontend",  # backend/src/euroleague_ai/main.py -> repo root
+        Path("/app/frontend"),
+    ]
+    for directory in candidates:
+        if (directory / "index.html").is_file():
+            app.mount(
+                "/app",
+                StaticFiles(directory=str(directory), html=True),
+                name="frontend",
+            )
+            logger.info("frontend mounted", extra={"path": str(directory)})
+            return
+    logger.info("no frontend directory found; serving API only")
 
 
 def _add_middleware(app: FastAPI, settings: Settings) -> None:

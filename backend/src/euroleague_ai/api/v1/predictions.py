@@ -18,9 +18,11 @@ from euroleague_ai.models.game import Game
 from euroleague_ai.models.people import Player
 from euroleague_ai.models.prediction import ModelVersion, Prediction
 from euroleague_ai.schemas.prediction import (
+    DriverOut,
     PlayerProjectionOut,
     PredictionOut,
     ProjectionsOut,
+    TargetProjectionOut,
 )
 
 router = APIRouter(tags=["predictions"])
@@ -55,6 +57,7 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
     if game is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, detail="Game not found")
 
+    home, away = await _team_labels(session, game)
     rows = await _load(session, game_id=game_id)
 
     projections: dict[uuid.UUID, PlayerProjectionOut] = {}
@@ -69,18 +72,84 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
                 models={},
             ),
         )
-        projection.targets[str(prediction.target)] = prediction.predicted_value
-        projection.models[str(prediction.target)] = f"{model_name} {model_version}"
+        target = str(prediction.target)
+        projection.targets[target] = prediction.predicted_value
+        projection.models[target] = f"{model_name} {model_version}"
+        projection.projections[target] = TargetProjectionOut(
+            value=prediction.predicted_value,
+            model=f"{model_name} {model_version}",
+            quantiles=prediction.quantiles,
+            threshold_probabilities=prediction.threshold_probabilities,
+            predicted_std=prediction.predicted_std,
+            confidence=(
+                float(prediction.confidence) if prediction.confidence is not None else None
+            ),
+            drivers=[
+                DriverOut(**driver)
+                for driver in (prediction.explanation or {}).get("drivers", [])
+            ],
+        )
+
+    await _attach_teams(session, game, projections)
 
     return ProjectionsOut(
         game_id=game_id,
         tip_off_utc=game.tip_off_utc,
+        home_team=home[0],
+        away_team=away[0],
+        home_team_code=home[1],
+        away_team_code=away[1],
         # Most minutes first: the players a reader cares about are at the top.
         players=sorted(
             projections.values(),
             key=lambda p: -(p.targets.get(str(PredictionTarget.MINUTES)) or 0.0),
         ),
     )
+
+
+async def _team_labels(session: SessionDep, game: Game) -> tuple[tuple[str, str], tuple[str, str]]:
+    """Home and away ``(name, code)``, for the header."""
+    from euroleague_ai.models.competition import Team
+
+    rows = (
+        await session.execute(
+            select(Team.id, Team.name, Team.code).where(
+                Team.id.in_([game.home_team_id, game.away_team_id])
+            )
+        )
+    ).all()
+    lookup = {team_id: (name, code) for team_id, name, code in rows}
+    return (
+        lookup.get(game.home_team_id, ("Home", "")),
+        lookup.get(game.away_team_id, ("Away", "")),
+    )
+
+
+async def _attach_teams(
+    session: SessionDep, game: Game, projections: dict[uuid.UUID, PlayerProjectionOut]
+) -> None:
+    """Tag each projection with the club it was made for.
+
+    Read from the feature snapshot rather than re-resolved here. The snapshot
+    records the team the prediction was actually built against, so the UI splits
+    the squads exactly as inference saw them -- re-deriving it now could disagree
+    after a transfer, and quietly show a player on the wrong side.
+    """
+    from euroleague_ai.models.competition import Team
+    from euroleague_ai.models.features import PlayerFeatureSnapshot
+
+    rows = (
+        await session.execute(
+            select(PlayerFeatureSnapshot.player_id, Team.id, Team.code)
+            .join(Team, Team.id == PlayerFeatureSnapshot.team_id)
+            .where(PlayerFeatureSnapshot.game_id == game.id)
+        )
+    ).all()
+    for player_id, team_id, team_code in rows:
+        projection = projections.get(player_id)
+        if projection is not None and projection.team_id is None:
+            projection.team_id = team_id
+            projection.team_code = team_code
 
 
 @router.get("/players/{player_id}/predictions", response_model=list[PredictionOut])

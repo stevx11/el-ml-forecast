@@ -8,7 +8,7 @@ cannot tell the difference between "no data" and "not implemented".
 
 from fastapi import APIRouter
 
-from euroleague_ai.api.v1 import games, leagues, players, predictions, teams
+from euroleague_ai.api.v1 import board, games, leagues, players, predictions, teams
 
 api_router = APIRouter()
 api_router.include_router(leagues.router)
@@ -16,5 +16,6 @@ api_router.include_router(teams.router)
 api_router.include_router(players.router)
 api_router.include_router(games.router)
 api_router.include_router(predictions.router)
+api_router.include_router(board.router)
 
 __all__ = ["api_router"]
