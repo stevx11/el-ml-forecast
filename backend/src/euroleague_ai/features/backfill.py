@@ -23,6 +23,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -158,6 +159,10 @@ async def backfill_game(
     targets = await _targets(session, game)
 
     now = clock.now()
+    # One cache per game. Team ratings and squad data are identical for every
+    # player on a side, so they are fetched once here instead of once per
+    # player -- roughly three times fewer queries for the same output.
+    cache: dict[Any, Any] = {}
     for target in targets:
         if target.player_id in already:
             result.snapshots_skipped += 1
@@ -171,6 +176,7 @@ async def backfill_game(
             as_of=cutoff,
             season_id=game.season_id,
             is_home=target.is_home,
+            cache=cache,
         )
 
         # ON CONFLICT rather than a pre-check: two concurrent backfills, or a

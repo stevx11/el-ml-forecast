@@ -455,3 +455,47 @@ class TeamHistoryRepository:
             )
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
+
+
+    async def squad_positions(
+        self,
+        team_id: uuid.UUID,
+        *,
+        as_of: datetime,
+        season_id: uuid.UUID | None = None,
+    ) -> dict[uuid.UUID, str]:
+        """Listed position for every player registered with the team at ``as_of``.
+
+        Read from ``PlayerTeamStint`` rather than from ``Player.position``. The
+        stint carries ``observed_at`` and ``effective_from``, so a position we
+        only learned later cannot leak backwards -- whereas ``Player.position``
+        is a mutable column with no history, and reading it would quietly answer
+        with today's listing for a game played in 2018.
+
+        Where a player has several stints in effect, the latest ``effective_from``
+        wins, matching how club membership is resolved elsewhere.
+        """
+        as_of = _as_of_guard(as_of)
+
+        stmt = (
+            select(
+                PlayerTeamStint.player_id,
+                PlayerTeamStint.position,
+                PlayerTeamStint.effective_from,
+            )
+            .where(
+                PlayerTeamStint.team_id == team_id,
+                PlayerTeamStint.observed_at <= as_of,
+                PlayerTeamStint.effective_from <= as_of,
+            )
+            .order_by(PlayerTeamStint.player_id, PlayerTeamStint.effective_from)
+        )
+        if season_id is not None:
+            stmt = stmt.where(PlayerTeamStint.season_id == season_id)
+
+        # Ordered ascending by effective_from, so the last write per player is
+        # the most recent registration -- the same tie-break used for clubs.
+        positions: dict[uuid.UUID, str] = {}
+        for player_id, position, _ in (await self._session.execute(stmt)).all():
+            positions[player_id] = str(position)
+        return positions

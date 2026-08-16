@@ -50,9 +50,38 @@ _THEME_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     #   ("teammate_" has no underscore after "team"), but the two are one typo
     #   apart and the ordering makes the intent explicit.
     (
+        # First. ``same_position_minutes_share`` and ``same_position_minutes_total``
+        # both contain "minutes", and the whole point of these features is that
+        # they describe the *squad around* the player rather than his own
+        # workload. Reporting "increased projected minutes" when the real driver
+        # was being fourth in line at his position would be precisely backwards.
+        "position",
+        ("position_", "same_position_"),
+        (),
+    ),
+    (
         "minutes",
         ("_minutes_mean", "ewma_minutes", "std10_minutes", "trend10_minutes"),
         ("previous_game_minutes", "minutes_last_7d"),
+    ),
+    (
+        # Second, ahead of every prefix rule it can collide with.
+        # ``game_expected_opp_points`` contains "opp_" and was being reported as
+        # an opponent effect -- the same trap as team_win_rate matching "_rate",
+        # and just as invisible in the output. The exact names are listed as
+        # well as the prefix, since theme_for checks exact matches first, so a
+        # future reordering cannot silently reclaim them.
+        "game_script",
+        ("game_",),
+        (
+            "game_expected_total",
+            "game_expected_margin",
+            "game_expected_abs_margin",
+            "game_blowout_risk",
+            "game_is_favourite",
+            "game_expected_team_points",
+            "game_expected_opp_points",
+        ),
     ),
     (
         "opponent",
@@ -97,11 +126,13 @@ _THEME_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
 _PHRASES: dict[str, tuple[str, str]] = {
     # theme: (positive, negative)
     "minutes": ("Increased projected minutes", "Reduced projected minutes"),
+    "position": ("Clear run at his position", "Crowded at his position"),
     "form": ("Strong recent form", "Weak recent form"),
     "role": ("Larger role in the rotation", "Smaller role in the rotation"),
     "schedule": ("Well rested", "Short rest or congested schedule"),
     "opponent": ("Favourable matchup", "Tough opponent defense"),
     "team": ("Strong team context", "Weak team context"),
+    "game_script": ("Competitive game expected", "Possible blowout, shorter rotation"),
     "teammates": ("Teammates missing, more opportunity", "Squad at full strength"),
     "experience": ("Established EuroLeague record", "Little EuroLeague history"),
     "other": ("Other factors", "Other factors"),

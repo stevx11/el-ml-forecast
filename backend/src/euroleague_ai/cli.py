@@ -861,6 +861,245 @@ def cmd_purge_snapshots(
     typer.echo(f"deleted {_run(job):,} snapshots")
 
 
+@ml_app.command("tune")
+def cmd_ml_tune(
+    target: Annotated[
+        str | None,
+        typer.Option("--target", "-t", help="Single target. Default: all five."),
+    ] = None,
+    trials: Annotated[
+        int, typer.Option("--trials", "-n", help="Configurations to sample.")
+    ] = 40,
+    start: Annotated[int | None, typer.Option("--from", help="First season start year.")] = None,
+    end: Annotated[int | None, typer.Option("--to", help="Last season start year.")] = None,
+    save: Annotated[
+        bool,
+        typer.Option("--save", help="Write the winner so `ml train` picks it up."),
+    ] = False,
+) -> None:
+    """Search for better LightGBM settings.
+
+    The current values were chosen when the feature set was smaller and have
+    never been re-tuned, which is the likeliest reason recent feature additions
+    made some targets slightly worse.
+
+    Every trial is scored on the validation split and the winner is chosen
+    there; only then is it retrained once and measured on test against the
+    current defaults. Selecting on test would make the reported gain the maximum
+    of N noisy draws rather than an estimate -- so the number printed here is
+    one you can believe.
+
+    Nothing is saved unless --save is passed.
+    """
+    from euroleague_ai.features.registry import FEATURE_SET_VERSION
+    from euroleague_ai.ml.dataset import load_training_rows
+    from euroleague_ai.ml.pipeline import MIN_ROWS
+    from euroleague_ai.ml.report import DEFAULT_TARGETS
+    from euroleague_ai.ml.train import train_target
+    from euroleague_ai.ml.tuning import save_params, search
+    from euroleague_ai.models.enums import PredictionTarget
+
+    if target:
+        try:
+            targets = (PredictionTarget[target.upper()],)
+        except KeyError as exc:
+            valid = ", ".join(t.name for t in DEFAULT_TARGETS)
+            raise typer.BadParameter(f"unknown target {target!r}. Valid: {valid}") from exc
+    else:
+        targets = DEFAULT_TARGETS
+
+    codes: list[str] | None = None
+    if start is not None or end is not None:
+        codes = [f"E{y}" for y in range((start or 2000), (end or 2025) + 1)]
+
+    async def job() -> object:
+        out = []
+        async with session_scope() as session:
+            for item in targets:
+                rows = await load_training_rows(
+                    session,
+                    target=item,
+                    feature_set_version=FEATURE_SET_VERSION,
+                    season_codes=codes,
+                )
+                if len(rows) < MIN_ROWS:
+                    out.append({"target": str(item), "error": f"only {len(rows)} rows"})
+                    continue
+
+                found = search(rows, item, trials=trials)
+
+                # The honest confirmation: retrain both on the same split and
+                # compare on test, which the search never touched.
+                tuned = train_target(rows, item, params=found.best.params)
+                default = train_target(rows, item)
+                record = found.as_dict()
+                record["test_mae_tuned"] = round(tuned.metrics.mae, 4)
+                record["test_mae_default"] = round(default.metrics.mae, 4)
+                record["test_gain_pct"] = round(
+                    (default.metrics.mae - tuned.metrics.mae) / default.metrics.mae * 100.0,
+                    2,
+                )
+                if save and record["test_gain_pct"] > 0:
+                    record["saved_to"] = str(save_params(item, found.best.params))
+                out.append(record)
+        return out
+
+    results = _run(job)
+    typer.echo("")
+    typer.secho(f"  Hyperparameter search - {trials} trials per target", bold=True)
+    typer.echo(
+        f"  {'target':<22}{'default':>9}{'tuned':>9}{'test gain':>11}   validation gain"
+    )
+
+    improved = 0
+    for row in results:  # type: ignore[union-attr]
+        if "error" in row:
+            typer.secho(f"  {row['target']:<22}{row['error']}", fg=typer.colors.YELLOW)
+            continue
+        better = row["test_gain_pct"] > 0
+        improved += better
+        typer.secho(
+            f"  {row['target']:<22}{row['test_mae_default']:>9.4f}"
+            f"{row['test_mae_tuned']:>9.4f}{row['test_gain_pct']:>+10.2f}%"
+            f"{row['validation_gain_pct']:>+15.2f}%",
+            fg=typer.colors.GREEN if better else None,
+        )
+        if row.get("saved_to"):
+            typer.secho(f"    {'':<20}saved -> {row['saved_to']}", fg=typer.colors.GREEN)
+
+    typer.echo("")
+    scored = [r for r in results if "error" not in r]  # type: ignore[union-attr]
+    if not scored:
+        return
+    if improved:
+        typer.secho(
+            f"  {improved} of {len(scored)} improved on test."
+            + ("" if save else " Re-run with --save to keep them."),
+            fg=typer.colors.GREEN, bold=True,
+        )
+    else:
+        typer.secho(
+            "  No target improved on test. The defaults are already reasonable;\n"
+            "  a validation gain that does not survive to test was selection noise.",
+            fg=typer.colors.YELLOW, bold=True,
+        )
+    typer.echo("")
+    for row in scored:
+        typer.echo(f"  {row['target']} best params: {row['best_params']}")
+
+
+@ml_app.command("chain")
+def cmd_ml_chain(
+    target: Annotated[
+        str | None,
+        typer.Option("--target", "-t", help="Single target. Default: all chainable."),
+    ] = None,
+    start: Annotated[int | None, typer.Option("--from", help="First season start year.")] = None,
+    end: Annotated[int | None, typer.Option("--to", help="Last season start year.")] = None,
+) -> None:
+    """Test whether predicting minutes then rates beats predicting the stat.
+
+    Points are minutes times scoring rate. Asking one model for points makes it
+    learn both at once; splitting them lets each learn the thing it is good at.
+    The counter-argument is that errors multiply -- minutes 10% high and rate
+    10% high gives points 21% high.
+
+    Which effect wins is measurable, not arguable, so this trains both on
+    identical rows and prints the answer. Nothing is registered or activated:
+    read the numbers first.
+    """
+    from euroleague_ai.features.registry import FEATURE_SET_VERSION
+    from euroleague_ai.ml.chain import CHAINABLE, compare_chain
+    from euroleague_ai.ml.dataset import load_training_rows
+    from euroleague_ai.ml.pipeline import MIN_ROWS
+    from euroleague_ai.models.enums import PredictionTarget
+
+    if target:
+        # Lookup by member name, matching the other commands. A StrEnum accepts
+        # either, but two conventions in one file is how a typo becomes a
+        # confusing error rather than an obvious one.
+        try:
+            targets = (PredictionTarget[target.upper()],)
+        except KeyError as exc:
+            valid = ", ".join(t.name for t in CHAINABLE)
+            raise typer.BadParameter(
+                f"unknown target {target!r}. Chainable: {valid}"
+            ) from exc
+        if targets[0] not in CHAINABLE:
+            raise typer.BadParameter(
+                f"{targets[0]} is not chainable -- minutes is the multiplier, "
+                "so it cannot be expressed as a rate of itself."
+            )
+    else:
+        targets = CHAINABLE
+
+    codes: list[str] | None = None
+    if start is not None or end is not None:
+        codes = [f"E{y}" for y in range((start or 2000), (end or 2025) + 1)]
+
+    async def job() -> object:
+        results = []
+        async with session_scope() as session:
+            for item in targets:
+                rows = await load_training_rows(
+                    session,
+                    target=item,
+                    feature_set_version=FEATURE_SET_VERSION,
+                    season_codes=codes,
+                )
+                if len(rows) < MIN_ROWS:
+                    results.append({"target": str(item), "error": f"only {len(rows)} rows"})
+                    continue
+                results.append(compare_chain(rows, item).as_dict())
+        return results
+
+    results = _run(job)
+    typer.echo("")
+    typer.secho("  Chained (minutes x rate) vs direct", bold=True)
+    typer.echo(
+        f"  {'target':<22}{'direct':>9}{'chained':>9}{'change':>9}{'baseline':>10}  verdict"
+    )
+
+    wins = 0
+    for row in results:  # type: ignore[union-attr]
+        if "error" in row:
+            typer.secho(f"  {row['target']:<22}{row['error']}", fg=typer.colors.YELLOW)
+            continue
+        better = row["chain_wins"]
+        wins += better
+        typer.secho(
+            f"  {row['target']:<22}{row['direct_mae']:>9.4f}{row['chained_mae']:>9.4f}"
+            f"{row['delta_pct']:>+8.2f}%{row['baseline_mae']:>10.4f}  "
+            f"{'CHAIN' if better else 'direct'}",
+            fg=typer.colors.GREEN if better else None,
+        )
+        typer.echo(
+            f"    {'':<20}minutes MAE {row['minutes_mae']:.3f} · "
+            f"rate MAE {row['rate_mae']:.3f} per 40"
+        )
+        for note in row.get("notes") or []:
+            typer.secho(f"    {'':<20}{note}", fg=typer.colors.YELLOW)
+
+    typer.echo("")
+    scored = [r for r in results if "error" not in r]  # type: ignore[union-attr]
+    if wins and wins == len(scored):
+        typer.secho(
+            "  The chain wins on every target. Worth wiring into serving.",
+            fg=typer.colors.GREEN, bold=True,
+        )
+    elif wins:
+        typer.secho(
+            f"  The chain wins on {wins} of {len(scored)}. Mixed - chain only where it wins.",
+            fg=typer.colors.YELLOW, bold=True,
+        )
+    else:
+        typer.secho(
+            "  Direct wins everywhere. Error compounding beat the stability gain;\n"
+            "  the honest move is to leave the models as they are.",
+            fg=typer.colors.YELLOW, bold=True,
+        )
+
+
 @ml_app.command("train")
 def cmd_ml_train(
     target: Annotated[

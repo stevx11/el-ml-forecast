@@ -425,6 +425,10 @@ async def predict_game(
     # Build every feature vector first, then predict per target in one batch.
     rows: list[tuple[uuid.UUID, uuid.UUID, dict[str, Any]]] = []
 
+    # One cache for the whole fixture. Team ratings and squad data are the same
+    # for every player on a side; without this they are re-queried per player.
+    feature_cache: dict[Any, Any] = {}
+
     for team_id, opponent_id, is_home in (
         (game.home_team_id, game.away_team_id, True),
         (game.away_team_id, game.home_team_id, False),
@@ -444,6 +448,7 @@ async def predict_game(
                 as_of=cutoff,
                 season_id=game.season_id,
                 is_home=is_home,
+                cache=feature_cache,
             )
             snapshot_id = await _upsert_snapshot(
                 session,

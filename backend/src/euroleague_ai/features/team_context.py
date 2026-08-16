@@ -36,6 +36,13 @@ FORM_WINDOW = 5
 #: ratings when possession data is missing.
 FALLBACK_POSSESSIONS = 72.0
 
+#: Margin at which a game is treated as a full blowout for the saturating risk
+#: feature. Fifteen points is roughly where EuroLeague rotations stop being
+#: competitive decisions; beyond it, coaches are managing minutes rather than
+#: chasing the result, and a thirty-point gap does not shorten a bench twice as
+#: much as a fifteen-point one.
+BLOWOUT_MARGIN = 15.0
+
 #: Below this many games in the current season, team ratings fall back to recent
 #: history regardless of season. Five is enough for a rating to mean something;
 #: below it the sample is noise and last season's rating is the better estimate,
@@ -209,4 +216,83 @@ async def build_team_context_features(
         features["matchup_expected_pace"] = None
 
     features["is_home"] = None if is_home is None else float(is_home)
+    features.update(game_script_features(features))
     return features
+
+
+def game_script_features(features: dict[str, float | None]) -> dict[str, float | None]:
+    """How the game itself is likely to unfold, and what that does to minutes.
+
+    **Why this exists.** The chain experiment measured minutes MAE at 4.43
+    against a mean of roughly twenty played minutes -- a 22% error on the
+    quantity every other projection is downstream of. Nothing in the feature set
+    told the model whether a game would be close, and closeness is exactly what
+    decides whether a starter plays the fourth quarter. A twenty-point game
+    empties both benches: the winning coach rests his rotation and the losing
+    one has nothing left to save them for. The two effects push in the same
+    direction, which is why the signal is the *absolute* margin rather than the
+    signed one.
+
+    **How the estimate is built.** A team's scoring rate in a given game is
+    approximated by averaging its own offensive rating with the opponent's
+    defensive rating -- the standard simple projection, and one that needs no
+    league-average constant. Scaled by expected possessions, that gives expected
+    points for each side, hence a total and a margin.
+
+    Deliberately no home-court constant. The size of home advantage is an
+    empirical quantity that varies by league and season, and hardcoding a guess
+    would bury it where nobody could audit it. ``is_home`` is already a feature,
+    so the model can learn the interaction from data instead.
+
+    Every input here is already filtered by ``as_of`` upstream, so this function
+    is pure arithmetic over numbers we were entitled to know.
+    """
+    team_off = features.get("team_off_rating")
+    team_def = features.get("team_def_rating")
+    opp_off = features.get("opp_off_rating")
+    opp_def = features.get("opp_def_rating")
+    pace = features.get("matchup_expected_pace")
+
+    blank: dict[str, float | None] = {
+        "game_expected_total": None,
+        "game_expected_margin": None,
+        "game_expected_abs_margin": None,
+        "game_blowout_risk": None,
+        "game_is_favourite": None,
+        "game_expected_team_points": None,
+        "game_expected_opp_points": None,
+    }
+    if None in (team_off, team_def, opp_off, opp_def):
+        return blank
+
+    # Possessions. Falls back to the league-average constant already used for
+    # ratings when neither side has a measured pace yet.
+    possessions = pace if pace is not None else FALLBACK_POSSESSIONS
+
+    # Each side's expected rating is the midpoint of its own attack and the
+    # other's defence: a good offence against a good defence lands in between.
+    team_rating = (team_off + opp_def) / 2.0  # type: ignore[operator]
+    opp_rating = (opp_off + team_def) / 2.0  # type: ignore[operator]
+
+    team_points = team_rating * possessions / 100.0
+    opp_points = opp_rating * possessions / 100.0
+    margin = team_points - opp_points
+
+    return {
+        # Opportunity: more expected points means more of everything to go round.
+        "game_expected_total": _round(team_points + opp_points),
+        # Signed, from this player's team's perspective. Positive means favoured.
+        "game_expected_margin": _round(margin),
+        # The blowout signal. Unsigned on purpose -- benches empty at both ends
+        # of a rout, so what matters is the gap, not who is ahead.
+        "game_expected_abs_margin": _round(abs(margin)),
+        # A bounded version of the same thing. Trees can split on the raw margin
+        # perfectly well, but a saturating transform means "comfortable" and
+        # "utter rout" stop looking like proportionally different worlds:
+        # rotations shorten sharply up to about fifteen points and then stop
+        # changing much.
+        "game_blowout_risk": _round(min(1.0, abs(margin) / BLOWOUT_MARGIN)),
+        "game_is_favourite": 1.0 if margin > 0 else 0.0,
+        "game_expected_team_points": _round(team_points),
+        "game_expected_opp_points": _round(opp_points),
+    }

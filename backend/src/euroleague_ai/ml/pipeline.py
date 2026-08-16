@@ -14,6 +14,7 @@ from euroleague_ai.ml.dataset import describe_rows, load_training_rows
 from euroleague_ai.ml.registry import register_model
 from euroleague_ai.ml.report import DEFAULT_TARGETS
 from euroleague_ai.ml.train import train_target
+from euroleague_ai.ml.tuning import load_params
 
 logger = get_logger(__name__)
 
@@ -52,7 +53,18 @@ async def train_and_register(
             }
             continue
 
-        result = train_target(rows, target, params=params)
+        # Tuned parameters, if the search has been run for this target.
+        # Explicit params passed by the caller still win, so a one-off
+        # experiment does not have to fight the saved file.
+        resolved_params = params
+        tuned_note = "defaults"
+        if resolved_params is None:
+            tuned = load_params(target, root=artifact_root)
+            if tuned:
+                resolved_params = tuned
+                tuned_note = "tuned"
+
+        result = train_target(rows, target, params=resolved_params)
         model_version = await register_model(
             session,
             result,
@@ -66,6 +78,7 @@ async def train_and_register(
             "summary": result.summary(),
             "by_minutes": result.by_minutes,
             "top_features": result.feature_importance[:15],
+            "params_source": tuned_note,
             "model": {
                 "name": model_version.name,
                 "version": model_version.version,

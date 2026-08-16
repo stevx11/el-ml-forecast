@@ -573,7 +573,7 @@ class TestComposedFeatureSet:
             assert marker in vector, f"missing family marker: {marker}"
 
         assert vector["season_points_mean"] == pytest.approx(13.0)
-        assert FEATURE_SET_VERSION == "v3"
+        assert FEATURE_SET_VERSION == "v5"
 
         # v3 exposes how much of the rolling window is same-season. The fixture
         # world is a single season, so it is entirely current.
