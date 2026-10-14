@@ -19,37 +19,6 @@ Why?  + Increased projected minutes    - Tough opponent defense
       + Usage up (teammate injured)    - Limited rest
 ```
 
-> **Status: Phase 0 — foundation.** The schema, ingestion pipeline, live
-> EuroLeague adapter, read API, and leakage-prevention machinery are built and
-> tested. **No models are trained yet**, so the projection above is the target,
-> not current output. See [Roadmap](#roadmap).
-
----
-
-## Why this is not a stats CRUD app
-
-Two requirements drive every design decision:
-
-1. **A prediction is only meaningful relative to an instant.** A projection made
-   48 hours before tip-off is a different prediction from one made after the
-   starting lineup is announced. The system must be able to answer *"what did we
-   know at 17:00?"*
-2. **A prediction we cannot backtest is a prediction we cannot trust.** If today's
-   model cannot be replayed honestly against the past, there is no way to know
-   whether it works.
-
-Both reduce to one thing: **the database records the history of knowledge, not
-just the current state of the world.** Nothing is overwritten. Availability
-changes, roster moves, and lineup announcements are stored as timestamped events
-and intervals, and every feature query is filtered by *when we learned each
-fact* — not when it happened.
-
-That distinction is the whole game. A report published at 19:00 describing a
-10:00 injury was not knowable at 17:00. Filtering on the event time looks correct
-and leaks anyway.
-
----
-
 ## Quick start
 
 Requires Docker and Docker Compose. Nothing else.
@@ -348,29 +317,6 @@ once, by `euroleague_ai.core.config.Settings`. There are no other reads of
 | `EUROLEAGUE_REQUEST_RATE_PER_SECOND` | `5` | Politeness towards a free public API. |
 | `NEWS_FEED_URLS` | *(empty)* | Comma-separated. No feeds ship enabled. |
 | `LOG_FORMAT` | `console` | `json` in production. |
-
----
-
-## Roadmap
-
-| Phase | Deliverable | Gate before moving on |
-|---|---|---|
-| **0 ✅** | Schema, ingestion, provider adapters, read API, leakage tests, Docker | Migrations apply; a full season ingests; leakage tests pass |
-| **1** | Full `as_of` feature catalogue — role, team, opponent, availability | Snapshots reproducible; leakage tests per feature family |
-| **2** | Baselines + walk-forward backtest harness | Baseline MAE published for every target |
-| **3** | LightGBM per target, minutes first | **Beats the best baseline** on walk-forward validation |
-| **4** | Minutes → usage → opportunity → efficiency chain; Monte Carlo distributions | Calibration within tolerance |
-| **5** | News collection, LLM event extraction, entity resolution | Measurable lift over phase 3 |
-| **6** | Domestic leagues (ABA, ACB) for fatigue and role signals | Measurable lift |
-| **7** | Prediction explanations, then the Angular frontend | — |
-
-Two rules govern this list. **Minutes are predicted first**, because every other
-box-score target is conditional on playing time. And **a model that does not beat
-a meaningful baseline is not a model** — the bar is a minutes-scaled rate
-projection, which is stronger than it sounds, and no phase advances without
-clearing it.
-
-Modelling detail: [`docs/ml-roadmap.md`](docs/ml-roadmap.md).
 
 ---
 
