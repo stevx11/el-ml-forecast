@@ -1652,6 +1652,165 @@ def _print_availability_block(block: dict[str, Any]) -> bool:
     return ok
 
 
+@ml_app.command("spread")
+def cmd_ml_spread(
+    target: Annotated[
+        str | None, typer.Option("--target", "-t", help="Single stat target. Default: all five.")
+    ] = None,
+) -> None:
+    """Are projections as spread out as real box scores? Test period, active models.
+
+    Calibration slope of outcomes on expected values (1 is right; above 1 means
+    projections are too bunched), outcomes by decile of projection, and the
+    15+/20+ nights the probabilities implied against those that happened.
+    """
+    from euroleague_ai.features.registry import FEATURE_SET_VERSION
+    from euroleague_ai.ml.inference import load_active_models
+    from euroleague_ai.ml.report import DEFAULT_TARGETS
+    from euroleague_ai.ml.spread import target_spread
+    from euroleague_ai.models.enums import PredictionTarget
+
+    targets: tuple[PredictionTarget, ...] = DEFAULT_TARGETS
+    if target:
+        try:
+            targets = (PredictionTarget[target.upper()],)
+        except KeyError as exc:
+            raise typer.BadParameter(f"unknown target {target!r}") from exc
+
+    async def job() -> object:
+        async with session_scope() as session:
+            models = await load_active_models(session, targets)
+            return [
+                await target_spread(session, t, models[t], feature_set_version=FEATURE_SET_VERSION)
+                for t in targets
+                if t in models
+            ]
+
+    reports: Any = _run(job)
+    for r in reports:
+        typer.echo("")
+        colour = typer.colors.GREEN if r.verdict == "about right" else typer.colors.YELLOW
+        typer.secho(
+            f"  {r.target} - {r.rows:,} test rows, expected values from {r.expected_source or 'median'}",
+            bold=True,
+        )
+        typer.secho(
+            f"    calibration slope {r.slope:.3f} (intercept {r.intercept:+.2f}): {r.verdict}"
+            f"    median slope {r.median_slope:.3f}",
+            fg=colour,
+        )
+        q = r.quantiles
+        typer.echo(f"    {'':<10}" + "".join(f"{'p' + str(int(float(k) * 100)):>8}" for k in q["actual"]) + f"{'std':>9}")
+        for name in ("median", "expected", "actual"):
+            typer.echo(
+                f"    {name:<10}" + "".join(f"{v:>8.2f}" for v in q[name].values()) + f"{r.std[name]:>9.3f}"
+            )
+        typer.echo("    by decile of expected value (projected -> actual):")
+        typer.echo(
+            "     " + "  ".join(f"{d['projected']:.1f}->{d['actual']:.1f}" for d in r.deciles)
+        )
+        if r.big_nights:
+            typer.echo(
+                "    big nights, implied by P(X+) vs happened: "
+                + ", ".join(
+                    f"{b['bar']}+ {b['implied']:,.0f} vs {b['realised']:,}"
+                    + (f" ({b['ratio']:.2f}x)" if b["ratio"] is not None else "")
+                    for b in r.big_nights
+                )
+            )
+
+
+@ml_app.command("walkforward")
+def cmd_ml_walkforward(
+    target: Annotated[
+        str | None,
+        typer.Option("--target", "-t", help="Single stat target. Default: all five."),
+    ] = None,
+    seasons: Annotated[int, typer.Option("--seasons", "-n", help="How many recent seasons to test.")] = 4,
+    expected: Annotated[
+        bool,
+        typer.Option("--expected/--no-expected", help="Also fit the expected-value head (twice as slow)."),
+    ] = False,
+) -> None:
+    """Train on every season before N, test on season N, for recent seasons.
+
+    One model per season per target, trained exactly like `ml train` and judged
+    against the best baseline on that season's games. Nothing is registered or
+    served. The report is saved, so a later change can be compared season by
+    season against this one. Slow: one full training per fold.
+    """
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.features.registry import FEATURE_SET_VERSION
+    from euroleague_ai.ml.dataset import load_training_rows
+    from euroleague_ai.ml.report import DEFAULT_TARGETS
+    from euroleague_ai.ml.tuning import load_params
+    from euroleague_ai.ml.walkforward import evaluate_target, save_report
+    from euroleague_ai.models.enums import PredictionTarget
+
+    if target:
+        try:
+            targets: tuple[PredictionTarget, ...] = (PredictionTarget[target.upper()],)
+        except KeyError as exc:
+            raise typer.BadParameter(f"unknown target {target!r}") from exc
+        if targets[0] not in DEFAULT_TARGETS:
+            raise typer.BadParameter(f"{target} is not a stat target; walk-forward covers {DEFAULT_TARGETS}")
+    else:
+        targets = DEFAULT_TARGETS
+    current = _season_default()
+
+    async def job() -> object:
+        results = []
+        async with session_scope() as session:
+            for t in targets:
+                rows = await load_training_rows(
+                    session, target=t, feature_set_version=FEATURE_SET_VERSION
+                )
+                typer.echo(f"  {t.name}: {len(rows):,} rows, training {seasons} fold(s)...")
+                results.append(
+                    evaluate_target(
+                        rows, t, seasons=seasons, current_season=current,
+                        fit_expected=expected, params=load_params(t),
+                    )
+                )
+        path = save_report(results, feature_set_version=FEATURE_SET_VERSION, now=SystemClock().now())
+        return results, path
+
+    out: Any = _run(job)
+    results, path = out
+    for result in results:
+        typer.echo("")
+        summary = result.summary()
+        typer.secho(
+            f"  {result.target.name}: beats the baseline in {summary['beats_baseline']}/{summary['folds']} "
+            f"seasons, median {summary['median_improvement_pct']:+.2f}% "
+            f"(worst {summary['worst_improvement_pct']:+.2f}%, best {summary['best_improvement_pct']:+.2f}%)"
+            if summary["folds"] else f"  {result.target.name}: no season had enough rows",
+            bold=True,
+            fg=typer.colors.GREEN if summary["folds"] and summary["beats_baseline"] == summary["folds"]
+            else typer.colors.YELLOW,
+        )
+        header = f"    {'season':<9}{'test rows':>10}{'model MAE':>11}{'baseline':>10}{'gain':>9}{'bias':>8}{'80% cov':>9}"
+        if expected:
+            header += f"{'RMSE med':>10}{'RMSE exp':>10}"
+        typer.echo(header + "  baseline used")
+        for fold in result.folds:
+            line = (
+                f"    {fold.season + ('*' if fold.partial else ''):<9}{fold.test_rows:>10,}"
+                f"{fold.model_mae:>11.4f}{fold.baseline_mae:>10.4f}{fold.improvement * 100:>+8.2f}%"
+                f"{fold.bias:>+8.3f}"
+                + (f"{fold.covered_80:>9.1%}" if fold.covered_80 is not None else f"{'-':>9}")
+            )
+            if expected:
+                line += (
+                    f"{fold.median_rmse if fold.median_rmse is not None else float('nan'):>10.3f}"
+                    f"{fold.expected_rmse if fold.expected_rmse is not None else float('nan'):>10.3f}"
+                )
+            typer.secho(line + f"  {fold.baseline}", fg=None if fold.beats_baseline else typer.colors.RED)
+    typer.echo("")
+    typer.echo("  * season still being played")
+    typer.echo(f"  saved: {path}")
+
+
 @ml_app.command("train")
 def cmd_ml_train(
     target: Annotated[
@@ -1969,14 +2128,14 @@ def cmd_ml_models() -> None:
 
     typer.echo("")
     typer.echo(
-        f"  {'name':<22}{'ver':<8}{'feat':<6}{'MAE':>9}{'base':>9}{'impr%':>8}  active"
+        f"  {'name':<27}{'ver':<8}{'feat':<6}{'MAE':>9}{'base':>9}{'impr%':>8}  active"
     )
     for m in models:  # type: ignore[union-attr]
         mae = m["mae"] if m["mae"] is not None else float("nan")
         base = m["baseline_mae"] if m["baseline_mae"] is not None else float("nan")
         impr = m["improvement"] if m["improvement"] is not None else float("nan")
         typer.secho(
-            f"  {m['name']:<22}{m['version']:<8}{m['features']:<6}"
+            f"  {m['name']:<27}{m['version']:<8}{m['features']:<6}"
             f"{mae:>9.4f}{base:>9.4f}{impr:>8.2f}"
             f"  {'yes' if m['active'] else 'no'}",
             fg=typer.colors.GREEN if m["active"] else None,

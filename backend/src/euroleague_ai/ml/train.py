@@ -323,11 +323,17 @@ def train_target(
     num_rounds: int = DEFAULT_NUM_ROUNDS,
     early_stopping: int = DEFAULT_EARLY_STOPPING,
     fit_expected: bool = True,
+    split: tuple[list[TrainingRow], list[TrainingRow], list[TrainingRow]] | None = None,
 ) -> TrainingResult:
     """Train one LightGBM model and judge it against the best baseline.
 
     With ``fit_expected`` (the default) a second, mean-targeting head is fitted
     and gated too. See :mod:`euroleague_ai.ml.expectation`.
+
+    ``split`` replaces the default 70/15/15 chronological split with explicit
+    ``(train, validation, test)`` rows; walk-forward evaluation uses it to test
+    on one whole season at a time. Everything else is identical, so a fold is
+    judged exactly as a production training run is.
 
     Raises:
         ValueError: if there are too few rows to form a chronological split.
@@ -335,7 +341,7 @@ def train_target(
     import lightgbm as lgb
 
     resolved_params = {**DEFAULT_PARAMS, **(params or {})}
-    train_rows, validation_rows, test_rows = chronological_split(rows)
+    train_rows, validation_rows, test_rows = split or chronological_split(rows)
 
     feature_names = derive_feature_names(rows)
     x_train, y_train = to_matrix(train_rows, feature_names)
