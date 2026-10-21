@@ -86,6 +86,8 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
             continue
         if prediction.target is PredictionTarget.PLAYS:
             projection.play_probability = prediction.predicted_value
+        if projection.availability is None:
+            projection.availability = (prediction.explanation or {}).get("availability")
         projection.targets[target] = prediction.predicted_value
         projection.models[target] = f"{model_name} {model_version}"
         projection.projections[target] = TargetProjectionOut(

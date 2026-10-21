@@ -46,13 +46,15 @@ from euroleague_ai.ml.expectation import (
 from euroleague_ai.ml.explain import PLAYS_MIN_IMPACT, PLAYS_PHRASES, explain_prediction
 from euroleague_ai.ml.registry import distribution_path, expectation_paths
 from euroleague_ai.features.snapshot import default_prediction_timestamp
-from euroleague_ai.models.enums import GameStatus, PredictionTarget
+from euroleague_ai.models.enums import GameStatus, PredictionTarget, StatusSourceType
 from euroleague_ai.models.features import PlayerFeatureSnapshot
 from euroleague_ai.models.game import Game
 from euroleague_ai.models.prediction import ModelVersion, Prediction
 from euroleague_ai.ml.matrix import features_to_matrix
 from euroleague_ai.ml.registry import active_model
 from euroleague_ai.ml.reconcile import MinutesReconciliation, load_reconciliation
+from euroleague_ai.features.injury_status import ResolvedStatus, resolve_status
+from euroleague_ai.repositories.availability import last_appearances, status_reports
 from euroleague_ai.repositories.rosters import candidate_players, current_club
 
 logger = get_logger(__name__)
@@ -417,6 +419,13 @@ async def predict_game(
             model.explain_batch(feature_dicts),
         )
 
+    # Injury reports known at the cutoff. Applied before minutes reconciliation,
+    # so a player ruled out has P(plays) = 0 and his minutes flow to the
+    # teammates who will actually be on the floor.
+    statuses = await _resolve_statuses(session, game, rows, cutoff=cutoff)
+    if statuses:
+        _apply_statuses(computed, statuses)
+
     if (
         reconciliation is not None
         and PredictionTarget.MINUTES in computed
@@ -494,6 +503,59 @@ async def predict_game(
             written += 1
 
     return written
+
+
+async def _resolve_statuses(
+    session: AsyncSession,
+    game: Game,
+    rows: list[tuple[uuid.UUID, uuid.UUID, dict[str, Any]]],
+    *,
+    cutoff: datetime,
+) -> dict[int, ResolvedStatus]:
+    """Row index to the injury report that applies to it in this game."""
+    player_ids = [player_id for player_id, _, _ in rows]
+    reports = await status_reports(session, player_ids, as_of=cutoff)
+    if not reports:
+        return {}
+    played = await last_appearances(session, list(reports), as_of=cutoff)
+    out: dict[int, ResolvedStatus] = {}
+    for index, player_id in enumerate(player_ids):
+        resolved = resolve_status(
+            reports.get(player_id, []),
+            game_id=game.id,
+            tip_off=game.tip_off_utc,
+            last_played=played.get(player_id),
+        )
+        if resolved is not None:
+            out[index] = resolved
+    return out
+
+
+def _apply_statuses(
+    computed: dict[PredictionTarget, tuple[list[float], list[float | None], list[Any]]],
+    statuses: dict[int, ResolvedStatus],
+) -> None:
+    """Zero P(plays) for players ruled out; attach the report to every line.
+
+    Stat lines stay "if he plays", like every other projection, so a player
+    reinstated late still has a sensible line. The squad totals and minutes
+    reconciliation discount him through P(plays) = 0.
+    """
+    for target, (values, expected, explanations) in computed.items():
+        for index, resolved in statuses.items():
+            explanation = dict(explanations[index] or {})
+            explanation["availability"] = resolved.as_dict()
+            if target is PredictionTarget.PLAYS and resolved.rules_out:
+                values[index] = 0.0
+                reason = resolved.report.reason
+                if resolved.report.source is StatusSourceType.NEWS:
+                    label = "Reported out in the news"
+                else:
+                    label = "Ruled out" + (f": {reason}" if reason else "")
+                explanation["drivers"] = [
+                    {"theme": "availability", "direction": "-", "label": label, "impact": 0.0}
+                ]
+            explanations[index] = explanation
 
 
 async def _upsert_snapshot(

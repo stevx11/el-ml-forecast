@@ -12,6 +12,7 @@ its own parsing quirks for no benefit.
 
 from __future__ import annotations
 
+from html.parser import HTMLParser
 from typing import Any
 from xml.etree import ElementTree
 
@@ -25,6 +26,49 @@ from euroleague_ai.providers.parsing import parse_datetime
 logger = get_logger(__name__)
 
 _ATOM_NS = "{http://www.w3.org/2005/Atom}"
+_CONTENT_NS = "{http://purl.org/rss/1.0/modules/content/}"
+_DC_NS = "{http://purl.org/dc/elements/1.1/}"
+
+#: Tags that end a line of text. Keeping paragraph breaks matters downstream:
+#: injury extraction works sentence by sentence, and a paragraph boundary is the
+#: most reliable sentence boundary there is.
+_BLOCK_TAGS = frozenset({"p", "br", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr"})
+
+
+class _TextExtractor(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.parts: list[str] = []
+        self._skip = 0
+
+    def handle_starttag(self, tag: str, attrs: Any) -> None:
+        if tag in ("script", "style"):
+            self._skip += 1
+        elif tag in _BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in ("script", "style") and self._skip:
+            self._skip -= 1
+        elif tag in _BLOCK_TAGS:
+            self.parts.append("\n")
+
+    def handle_data(self, data: str) -> None:
+        if not self._skip:
+            self.parts.append(data)
+
+
+def html_to_text(html: str | None) -> str | None:
+    """Readable text from an HTML fragment: tags dropped, entities decoded,
+    one line per paragraph."""
+    if not html:
+        return None
+    parser = _TextExtractor()
+    parser.feed(html)
+    parser.close()
+    lines = [" ".join(line.split()) for line in "".join(parser.parts).split("\n")]
+    text = "\n".join(line for line in lines if line)
+    return text or None
 
 
 def _text(element: Any) -> str | None:
@@ -70,8 +114,11 @@ def parse_feed(xml: str) -> list[ArticleDTO]:
                 external_id=_text(item.find("guid")),
                 url=link,
                 title=title,
-                summary=_text(item.find("description")),
-                author=_text(item.find("author")),
+                summary=html_to_text(_text(item.find("description"))),
+                # WordPress feeds carry the whole article here; without it the
+                # injury details in the body would never be seen.
+                body=html_to_text(_text(item.find(f"{_CONTENT_NS}encoded"))),
+                author=_text(item.find("author")) or _text(item.find(f"{_DC_NS}creator")),
                 published_at=_parse_rfc2822(_text(item.find("pubDate"))),
             )
         )

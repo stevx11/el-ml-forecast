@@ -5,6 +5,8 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from typing import Any
+
 from pydantic import BaseModel, ConfigDict, Field
 
 from euroleague_ai.models.enums import PredictionTarget
@@ -81,6 +83,10 @@ class PlayerProjectionOut(BaseModel):
     #: P(takes the floor). Every value in ``targets`` is conditional on it.
     #: Null until a play-probability model is active.
     play_probability: float | None = None
+    #: The injury or availability report that applied at the cutoff, if any:
+    #: ``{"status": "OUT", "reason": ..., "scope": "game"|"until"|"open",
+    #: "until": ..., "source": ..., "reported_at": ...}``.
+    availability: dict[str, Any] | None = None
 
     @property
     def minutes(self) -> float:

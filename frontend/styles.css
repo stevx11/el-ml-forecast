@@ -245,6 +245,9 @@ tbody td { padding: 9px 10px; text-align: right; }
 /* Probability bar: the actual product, not decoration. */
 td.plays { color: var(--text-dim); }
 .mode-tabs { margin-top: 0; }
+.status-badge { font-size: 0.6rem; font-weight: 700; letter-spacing: 0.05em; padding: 2px 5px; border-radius: 4px; flex: none; }
+.status-badge.out { background: color-mix(in srgb, var(--bad) 22%, transparent); color: var(--bad); }
+.status-badge.flag { background: color-mix(in srgb, var(--warn) 22%, transparent); color: var(--warn); }
 tfoot tr.total-row { border-top: 1px solid var(--line); background: var(--bg); cursor: default; }
 tfoot tr.total-row td { padding: 9px 10px; text-align: right; font-weight: 600; }
 tfoot tr.total-row td:first-child { text-align: left; padding-left: 14px; }

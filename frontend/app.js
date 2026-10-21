@@ -36,6 +36,25 @@ const state = {
   status: null,
 };
 
+/** Short badge text for an injury report, or "" when none applies. */
+const STATUS_BADGE = {
+  OUT: { text: "OUT", cls: "out" },
+  SUSPENDED: { text: "SUSP", cls: "out" },
+  DOUBTFUL: { text: "DOUBT", cls: "flag" },
+  QUESTIONABLE: { text: "GTD", cls: "flag" },
+  PROBABLE: { text: "PROB", cls: "flag" },
+};
+function statusBadge(availability) {
+  let badge = availability && STATUS_BADGE[availability.status];
+  if (!badge) return "";
+  // A news reading too uncertain to rule him out: flagged, not stated.
+  if (badge.cls === "out" && availability.applied === false) {
+    badge = { text: `${badge.text}?`, cls: "flag" };
+  }
+  const why = [availability.status.toLowerCase(), availability.reason].filter(Boolean).join(": ");
+  return `<span class="status-badge ${badge.cls}" title="${esc(why)}">${badge.text}</span>`;
+}
+
 /** The number shown in a stat cell for the current line mode. */
 function lineValue(player, key) {
   if (key === "PLAYS") return player.play_probability ?? null;
@@ -365,6 +384,7 @@ function renderGame() {
       <td><div class="player-cell">
         ${player.team_code ? `<span class="team-tag">${esc(player.team_code)}</span>` : ""}
         <span class="player-name" title="${esc(player.player_name)}">${esc(player.player_name)}</span>
+        ${statusBadge(player.availability)}
       </div></td>
       <td class="num plays">${plays == null ? "–" : pct(plays)}</td>
       ${TARGETS.map((t) => {
@@ -457,6 +477,17 @@ function openDrawer(playerId) {
         <span class="prob-fill" style="display:block;width:${Math.round(plays.value * 100)}%"></span>
       </span>
       <p class="faint" style="margin-top:8px">Every projection below assumes he takes the floor.</p>`;
+    const report = player.availability;
+    if (report) {
+      const scope = report.scope === "game" ? "for this game"
+        : report.scope === "until" ? `until ${report.until}` : "until he plays again";
+      html += `<p class="muted expected-line" style="margin-top:8px">${statusBadge(report)}
+        ${esc(report.status.toLowerCase())}${report.reason && report.source !== "NEWS" ? ` (${esc(report.reason)})` : ""}, ${esc(scope)} ·
+        ${report.source === "NEWS"
+          ? `read from news (confidence ${fmt(report.confidence, 2)})${report.applied ? "" : ", not applied"}`
+          : "entered manually"} ·
+        ${esc(new Date(report.reported_at).toLocaleString())}</p>`;
+    }
     if (plays.drivers?.length) {
       html += `<div class="drivers" style="margin-top:10px">`;
       for (const driver of plays.drivers) {

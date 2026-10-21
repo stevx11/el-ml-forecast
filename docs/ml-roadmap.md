@@ -269,6 +269,29 @@ strictly worse than an honest point estimate, because it invites trust it has no
 
 ---
 
+## Phase 5a — Injury reports (started)
+
+Collected automatically from news feeds with full text (`news collect`, run by the
+scheduler before predictions), and readable from the official round report as
+written up there. `news/injury_extract.py` reads statuses by rule: rostered names,
+clause-level status phrases, negation and past-tense guards, a confidence per reading.
+Readings land in `news_events` (audit) and `player_status_events` (`source = NEWS`,
+`observed_at` = fetch time). Each reading gets a scope from its wording (rules-v2):
+"ruled out for X's game on Friday" covers the team's next fixture only; "sidelined
+for 6 to 8 weeks" lasts until the lower bound; anything else is open but lapses after
+8 days unless a newer article repeats it. Recaps ("last played in Round 2", "it was
+communicated that…") are discounted below the rule-out threshold. After a rules
+change, `news extract --replace --days N` re-reads stored articles and drops the
+old readings. Manual entry remains for overrides:
+`euroleague-ai injuries set|import|list|history`. Reports are scoped to one game,
+to every game before a return date, or open-ended until the player plays again.
+
+At prediction time the report that applies at the cutoff (newest first) is attached to
+every line. **Out** and **suspended** set P(plays) to 0, before minutes reconciliation,
+so teammates absorb the minutes. News readings must reach 0.8 confidence to do so. Other labels are shown but change nothing yet: there
+is no history of how often a "game-time decision" plays. After a season of reports
+they can become calibrated features.
+
 ## Phase 5 — News
 
 ```

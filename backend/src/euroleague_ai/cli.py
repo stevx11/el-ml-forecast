@@ -40,6 +40,10 @@ quality_app = typer.Typer(help="Data quality", no_args_is_help=True)
 ml_app = typer.Typer(help="Datasets, baselines, evaluation", no_args_is_help=True)
 maintenance_app = typer.Typer(help="Data repair", no_args_is_help=True)
 pipeline_app = typer.Typer(help="Scheduled end-to-end runs", no_args_is_help=True)
+injuries_app = typer.Typer(
+    help="Injury and availability reports. Enter each round's report before tip-off.",
+    no_args_is_help=True,
+)
 app.add_typer(ingest_app, name="ingest")
 app.add_typer(features_app, name="features")
 app.add_typer(news_app, name="news")
@@ -47,6 +51,7 @@ app.add_typer(quality_app, name="quality")
 app.add_typer(ml_app, name="ml")
 app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(pipeline_app, name="pipeline")
+app.add_typer(injuries_app, name="injuries")
 
 T = TypeVar("T")
 
@@ -397,31 +402,337 @@ def cmd_build_features(
 
 @news_app.command("collect")
 def cmd_collect_news() -> None:
-    """Poll every configured news feed.
+    """Poll every configured feed, store new articles, read injuries out of them.
 
-    No feeds ship configured. Set ``NEWS_FEED_URLS`` to sources you are
-    permitted to poll; see the legal note in docs/architecture.md.
+    Set NEWS_FEED_URLS, e.g. https://www.eurohoops.net/en/euroleague/feed/.
+    Runs automatically in the scheduled pipeline, before predictions.
     """
-    from euroleague_ai.news.rss import RssNewsCollector
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.news.pipeline import collect_news
+
+    settings = get_settings()
+    if not settings.news_feed_urls:
+        typer.secho(
+            "  No feeds configured. Set NEWS_FEED_URLS in .env, e.g.\n"
+            "  NEWS_FEED_URLS=https://www.eurohoops.net/en/euroleague/feed/",
+            fg=typer.colors.YELLOW,
+        )
+        raise typer.Exit(code=1)
 
     async def job() -> object:
-        settings = get_settings()
-        if not settings.news_feed_urls:
-            typer.echo("No feeds configured. Set NEWS_FEED_URLS in your environment.")
-            return {"articles": 0}
+        async with session_scope() as session:
+            result = await collect_news(session, settings=settings, now=SystemClock().now())
+            await session.commit()
+            return result.as_dict()
 
-        collector = RssNewsCollector(settings)
-        try:
-            total = 0
-            for url in settings.news_feed_urls:
-                articles = await collector.collect(url)
-                typer.echo(f"  {url}: {len(articles)} articles")
-                total += len(articles)
-            return {"articles": total}
-        finally:
-            await collector.aclose()
+    r: dict[str, Any] = _run(job)  # type: ignore[assignment]
+    for url, count in r["feeds"].items():
+        failed = url in r["failed_feeds"]
+        typer.secho(
+            f"  {url}: {'could not be read' if failed else f'{count} new article(s)'}",
+            fg=typer.colors.RED if failed else None,
+        )
+    typer.echo(
+        f"  {r['readings']} injury reading(s), {r['ruled_out']} confident enough to rule a player out"
+    )
+    if r["readings"]:
+        typer.echo("  see them with: euroleague-ai news injuries")
 
-    _report("news", _run(job))
+
+@news_app.command("extract")
+def cmd_news_extract(
+    days: Annotated[int, typer.Option("--days", help="Re-read articles from the last N days.")] = 14,
+    replace: Annotated[
+        bool,
+        typer.Option(
+            "--replace",
+            help="Re-read every article in the window and drop the readings taken from them before.",
+        ),
+    ] = False,
+) -> None:
+    """Re-read stored articles that the current rules haven't read yet.
+
+    With --replace, every article in the window is read again and its earlier
+    readings are deleted, so a misreading fixed in the rules disappears.
+    """
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.news.pipeline import extract_articles, reread_articles, unread_articles
+
+    async def job() -> object:
+        now = SystemClock().now()
+        async with session_scope() as session:
+            if replace:
+                result = await reread_articles(session, now=now, days=days)
+            else:
+                articles = await unread_articles(session, now=now, days=days)
+                result = (len(articles), *await extract_articles(session, articles, now=now))
+            await session.commit()
+            return result
+
+    count, readings, ruled_out = _run(job)  # type: ignore[misc]
+    typer.echo(f"  read {count} article(s): {readings} injury reading(s), {ruled_out} ruling a player out")
+
+
+@news_app.command("injuries")
+def cmd_news_injuries(
+    days: Annotated[int, typer.Option("--days", help="How far back to list.")] = 7,
+) -> None:
+    """Injury readings taken from news, with the sentence each came from.
+
+    The date is when the article was published; the scope says how long the
+    reading lasts: one game, until a date, or open (until he plays again).
+    """
+    from datetime import timedelta
+
+    from sqlalchemy import select
+
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.features.injury_status import NEWS_RULE_OUT_CONFIDENCE, RULES_OUT
+    from euroleague_ai.models.competition import Team
+    from euroleague_ai.models.news import NewsArticle, NewsEvent
+    from euroleague_ai.models.people import Player
+
+    async def job() -> object:
+        since = SystemClock().now() - timedelta(days=days)
+        async with session_scope() as session:
+            return (
+                await session.execute(
+                    select(NewsEvent, Player.full_name, Team.code, NewsArticle.title)
+                    .join(Player, Player.id == NewsEvent.player_id)
+                    .join(NewsArticle, NewsArticle.id == NewsEvent.article_id)
+                    .outerjoin(Team, Team.id == NewsEvent.team_id)
+                    .where(NewsEvent.observed_at >= since)
+                    .order_by(NewsEvent.observed_at.desc())
+                )
+            ).all()
+
+    rows = _run(job)
+    if not rows:
+        typer.echo(f"  no injury readings in the last {days} day(s)")
+        return
+    from euroleague_ai.models.enums import AvailabilityStatus
+
+    for event, name, team_code, title in rows:  # type: ignore[attr-defined]
+        payload = event.payload
+        status = AvailabilityStatus(payload.get("status", "UNKNOWN"))
+        applies = status in RULES_OUT and float(event.confidence) >= NEWS_RULE_OUT_CONFIDENCE
+        published = (payload.get("published_at") or event.observed_at.isoformat())[5:10]
+        scope = payload.get("scope") or "open"
+        if scope == "game" and payload.get("game_code") is not None:
+            scope = f"game {payload['game_code']}"
+        elif scope == "until" and payload.get("until"):
+            scope = f"until {payload['until'][5:]}"
+        typer.secho(
+            f"  {published}  {team_code or '?':<4} {name:<26} "
+            f"{str(status):<13} {float(event.confidence):.2f}  {scope:<12}"
+            + ("  rules out" if applies else ""),
+            fg=typer.colors.RED if applies else None,
+        )
+        typer.echo(f"      \"{event.payload.get('sentence', '')[:150]}\"")
+        typer.echo(f"      {title[:90]}")
+
+
+async def _season_id(session: Any, season: str) -> Any:
+    from sqlalchemy import select
+
+    from euroleague_ai.models.competition import Season
+
+    return (
+        await session.execute(select(Season.id).where(Season.code == (season or _season_default())))
+    ).scalar_one_or_none()
+
+
+def _print_report(recorded: Any) -> None:
+    scope = (
+        f"game {recorded.game_code}"
+        if recorded.scope == "game"
+        else f"until {recorded.until}"
+        if recorded.scope == "until"
+        else "until he plays again"
+    )
+    reason = f"  ({recorded.reason})" if recorded.reason else ""
+    typer.echo(
+        f"  {recorded.player.team_code:<4} {recorded.player.full_name:<28} "
+        f"{str(recorded.status):<13} {scope}{reason}"
+    )
+
+
+@injuries_app.command("set")
+def cmd_injuries_set(
+    player: Annotated[str, typer.Argument(help='Name or player code, e.g. "Petrovic" or "Marko Petrovic".')],
+    status: Annotated[
+        str,
+        typer.Argument(help="out, suspended, doubtful, questionable (gtd), probable, available (back)."),
+    ],
+    team: Annotated[str | None, typer.Option("--team", "-t", help="Club code, to pick between players with one name.")] = None,
+    reason: Annotated[str | None, typer.Option("--reason", "-r", help='e.g. "knee", "illness".')] = None,
+    until: Annotated[str | None, typer.Option("--until", help="Out until this date (YYYY-MM-DD), for every game before it.")] = None,
+    indefinite: Annotated[bool, typer.Option("--indefinite", help="No return date: applies until he plays again or is set back.")] = False,
+    game_code: Annotated[int | None, typer.Option("--game-code", "-g", help="Only this fixture. Default: his team's next game.")] = None,
+    season: SeasonOption = "",
+) -> None:
+    """Record one player's status, stamped with the time you entered it.
+
+    With no --game-code, --until or --indefinite, it covers his team's next game.
+    A player recorded as out or suspended gets P(plays) = 0 in the next
+    `ml predict`, and his minutes go to his teammates. Enter it before the
+    prediction cutoff (60 minutes before tip-off) to count.
+    """
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.ingestion.injuries import InjuryInputError, current_rosters, record_report
+
+    async def job() -> object:
+        now = SystemClock().now()
+        async with session_scope() as session:
+            roster = await current_rosters(session, as_of=now)
+            recorded = await record_report(
+                session,
+                roster=roster,
+                player=player,
+                status=status,
+                now=now,
+                team_code=team,
+                reason=reason,
+                until=until,
+                indefinite=indefinite,
+                game_code=game_code,
+                season_id=await _season_id(session, season),
+            )
+            await session.commit()
+            return recorded
+
+    try:
+        recorded = _run(job)
+    except InjuryInputError as exc:
+        typer.secho(f"  {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    typer.secho("  recorded:", fg=typer.colors.GREEN)
+    _print_report(recorded)
+
+
+@injuries_app.command("import")
+def cmd_injuries_import(
+    path: Annotated[str, typer.Argument(help="CSV with a header row.")],
+    season: SeasonOption = "",
+) -> None:
+    """Record a whole round's report from a CSV, all or nothing.
+
+    Columns: player, status (required); team, reason, until (YYYY-MM-DD),
+    game_code, indefinite (yes/no) (optional). Example:
+
+        player,status,team,reason,until
+        Petrovic,out,PAR,knee,
+        Hezonja,questionable,MAD,ankle,
+        Mirotic,out,,hamstring,2026-11-15
+    """
+    from pathlib import Path
+
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.ingestion.injuries import InjuryInputError, import_reports
+
+    async def job() -> object:
+        async with session_scope() as session:
+            recorded = await import_reports(
+                session,
+                Path(path),
+                now=SystemClock().now(),
+                season_id=await _season_id(session, season),
+            )
+            await session.commit()
+            return recorded
+
+    try:
+        recorded = _run(job)
+    except (InjuryInputError, FileNotFoundError) as exc:
+        typer.secho(f"  {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    typer.secho(f"  recorded {len(recorded)} report(s):", fg=typer.colors.GREEN)  # type: ignore[arg-type]
+    for item in recorded:  # type: ignore[attr-defined]
+        _print_report(item)
+
+
+@injuries_app.command("list")
+def cmd_injuries_list() -> None:
+    """Reports that apply to each team's next game right now."""
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.features.injury_status import resolve_status
+    from euroleague_ai.ingestion.injuries import current_rosters, next_game
+    from euroleague_ai.repositories.availability import last_appearances, status_reports
+
+    async def job() -> object:
+        now = SystemClock().now()
+        async with session_scope() as session:
+            roster = await current_rosters(session, as_of=now)
+            by_id = {p.player_id: p for p in roster}
+            reports = await status_reports(session, list(by_id), as_of=now)
+            played = await last_appearances(session, list(reports), as_of=now)
+            rows = []
+            games: dict[Any, Any] = {}
+            for player_id, items in reports.items():
+                member = by_id[player_id]
+                if member.team_id not in games:
+                    games[member.team_id] = await next_game(session, member.team_id, after=now)
+                game = games[member.team_id]
+                if game is None:
+                    continue
+                resolved = resolve_status(
+                    items, game_id=game.id, tip_off=game.tip_off_utc, last_played=played.get(player_id)
+                )
+                if resolved is not None:
+                    rows.append((member.team_code, member.full_name, game.game_code, resolved.as_dict()))
+            return sorted(rows, key=lambda r: (r[0], r[1]))
+
+    rows = _run(job)
+    if not rows:
+        typer.echo("  no reports apply to upcoming games. Add one with `euroleague-ai injuries set`.")
+        return
+    typer.echo("")
+    typer.echo(
+        f"  {'team':<5}{'player':<28}{'status':<14}{'next game':<10}{'scope':<12}"
+        f"{'source':<12}{'applied':<9}reason"
+    )
+    for team_code, name, code, info in rows:  # type: ignore[attr-defined]
+        scope = {"game": "this game", "until": f"to {info['until']}", "open": "until back"}[info["scope"]]
+        source = info["source"].lower()
+        if info.get("confidence") is not None:
+            source += f" {float(info['confidence']):.2f}"
+        applied = "P=0" if info.get("applied") else "-"
+        typer.echo(
+            f"  {team_code:<5}{name:<28}{info['status']:<14}{code!s:<10}{scope:<12}"
+            f"{source:<12}{applied:<9}{info['reason'] or ''}"
+        )
+
+
+@injuries_app.command("history")
+def cmd_injuries_history(
+    player: Annotated[str, typer.Argument(help="Name or player code.")],
+    team: Annotated[str | None, typer.Option("--team", "-t")] = None,
+) -> None:
+    """Every report recorded for one player, newest first."""
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.ingestion.injuries import InjuryInputError, current_rosters, match_player
+    from euroleague_ai.repositories.availability import status_reports
+
+    async def job() -> object:
+        now = SystemClock().now()
+        async with session_scope() as session:
+            match = match_player(await current_rosters(session, as_of=now), player, team_code=team)
+            reports = (await status_reports(session, [match.player_id], as_of=now)).get(match.player_id, [])
+            return match, reports
+
+    try:
+        match, reports = _run(job)  # type: ignore[misc]
+    except InjuryInputError as exc:
+        typer.secho(f"  {exc}", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    typer.secho(f"  {match.full_name} ({match.team_code})", bold=True)
+    if not reports:
+        typer.echo("  no reports recorded")
+    for r in reports:
+        scope = "one game" if r.game_id else (f"until {r.expected_return.date()}" if r.expected_return else "until back")
+        typer.echo(
+            f"  {r.observed_at:%Y-%m-%d %H:%M}  {str(r.status):<13} {scope:<18} {str(r.source):<8} {r.reason or ''}"
+        )
 
 
 @app.command("version")
@@ -1597,6 +1908,7 @@ def cmd_ml_show(
                         Prediction.threshold_probabilities,
                         Prediction.confidence,
                         Prediction.expected_value,
+                        Prediction.explanation,
                     )
                     .join(Player, Player.id == Prediction.player_id)
                     .join(ModelVersion, ModelVersion.id == Prediction.model_version_id)
@@ -1608,8 +1920,11 @@ def cmd_ml_show(
             ).all()
 
             by_player: dict[str, dict[str, Any]] = {}
-            for full_name, target, value, quantiles, thresholds, confidence, expected in rows:
+            for full_name, target, value, quantiles, thresholds, confidence, expected, explanation in rows:
                 entry = by_player.setdefault(full_name, {})
+                availability = (explanation or {}).get("availability")
+                if availability and "status" not in entry:
+                    entry["status"] = availability.get("status")
                 entry[str(target)] = float(value)
                 if expected is not None:
                     entry[f"{str(target)}_e"] = float(expected)
@@ -1670,7 +1985,9 @@ def cmd_ml_show(
             )
             or "-"
         )
-        typer.echo(f"  {name:<28}{play_cell}{cells}{conf_cell}   {odds}")
+        status = values.get("status")
+        marker = f"  [{status}]" if status else ""
+        typer.echo(f"  {name:<28}{play_cell}{cells}{conf_cell}   {odds}{marker}")
 
     if not any(v.get("POINTS_q") for v in players.values()):
         typer.secho(
