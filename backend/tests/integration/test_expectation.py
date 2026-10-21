@@ -152,6 +152,23 @@ class TestStoredAndScored:
         report = await accuracy_report(session)
         expected = report["targets"]["POINTS"]["expected"]
         assert expected["scored"] == 4  # Jovanovic did not appear
+
+        # Overall P(X+): every prediction counts, Jovanovic's included, at
+        # 0.9 x the conditional chance; the conditional table leaves him out.
+        bars = len(
+            (
+                await session.execute(
+                    select(Prediction.threshold_probabilities).where(
+                        Prediction.target == PredictionTarget.POINTS
+                    )
+                )
+            ).scalars().first()
+            or {}
+        )
+        assert bars > 0
+        conditional = sum(b["predictions"] for b in report["thresholds"])
+        overall = sum(b["predictions"] for b in report["thresholds_overall"])
+        assert (conditional, overall) == (4 * bars, 5 * bars)
         assert report["team_totals"]["POINTS"]["expected"]["team_games"] == 2
 
 
@@ -193,6 +210,12 @@ class TestApi:
         assert points["value"] == 10.0
         assert points["expected"] == pytest.approx(12.0)
         assert points["expected_overall"] == pytest.approx(10.8)
+        # P(X+) counting the 10% chance he sits: 0.9 x the "if he plays" chance.
+        conditional = points["threshold_probabilities"]
+        assert conditional, "the skewed distribution publishes threshold chances"
+        assert points["threshold_probabilities_overall"] == {
+            bar: pytest.approx(0.9 * p, abs=1e-4) for bar, p in conditional.items()
+        }
         assert body["team_totals"]["PAR"]["POINTS"] == pytest.approx(32.4)
         assert body["team_totals"]["BAS"]["POINTS"] == pytest.approx(21.6)
         assert "PLAYS" not in body["team_totals"]["PAR"]

@@ -53,6 +53,11 @@ from euroleague_ai.models.prediction import ModelVersion, Prediction
 from euroleague_ai.ml.matrix import features_to_matrix
 from euroleague_ai.ml.registry import active_model
 from euroleague_ai.ml.reconcile import MinutesReconciliation, load_reconciliation
+from euroleague_ai.ml.squad_stats import (
+    STAT_TARGETS,
+    StatsReconciliation,
+    load_stats_reconciliation,
+)
 from euroleague_ai.features.injury_status import ResolvedStatus, resolve_status
 from euroleague_ai.repositories.availability import last_appearances, status_reports
 from euroleague_ai.repositories.rosters import candidate_players, current_club
@@ -327,6 +332,7 @@ async def predict_game(
     clock: Clock | None = None,
     settings: Settings | None = None,
     reconciliation: MinutesReconciliation | None = None,
+    stats_reconciliation: StatsReconciliation | None = None,
 ) -> int:
     """Build snapshots and predictions for one upcoming game.
 
@@ -335,6 +341,10 @@ async def predict_game(
             fitted for exactly these MINUTES and PLAYS model versions, each
             side's expected minutes are scaled so the squad adds up. See
             :mod:`euroleague_ai.ml.reconcile`.
+        stats_reconciliation: The gated squad fit for points, assists, rebounds
+            and threes, from the same command. Pulls each side's expected stat
+            totals toward a team-level anchor. See
+            :mod:`euroleague_ai.ml.squad_stats`.
 
     Returns the number of prediction rows written.
     """
@@ -455,6 +465,16 @@ async def predict_game(
                 extra={"game_code": game.game_code},
             )
 
+    if stats_reconciliation is not None and PredictionTarget.PLAYS in computed:
+        if stats_reconciliation.applies_to(models):
+            _reconcile_stats(computed, stats_reconciliation, feature_dicts)
+        else:
+            logger.warning(
+                "squad stat reconciliation was fitted for other model versions; "
+                "skipping it. Run `euroleague-ai ml reconcile` after training.",
+                extra={"game_code": game.game_code},
+            )
+
     for target, model in models.items():
         values, expected_values, explanations = computed[target]
         for (player_id, snapshot_id, features), value, expected, explanation in zip(
@@ -503,6 +523,43 @@ async def predict_game(
             written += 1
 
     return written
+
+
+def _reconcile_stats(
+    computed: dict[PredictionTarget, tuple[list[float], list[float | None], list[Any]]],
+    fit: StatsReconciliation,
+    feature_dicts: list[dict[str, Any]],
+) -> None:
+    """Scale each side's expected stat lines toward its squad anchor.
+
+    Every factor is computed from the unreconciled values first, as in the
+    fit, so the order the stats are adjusted in does not matter. The factor is
+    kept in the explanation, so a line can be traced back to its model value.
+    """
+    base: dict[PredictionTarget, list[float]] = {}
+    for target in STAT_TARGETS:
+        if target not in computed:
+            continue
+        medians, expected, _ = computed[target]
+        if any(e is None for e in expected):
+            continue  # nothing published to adjust
+        base[target] = [float(e) for e in expected if e is not None]
+    factors = fit.factors(
+        base,
+        computed[PredictionTarget.PLAYS][0],
+        [features.get("is_home") for features in feature_dicts],
+        feature_dicts,
+    )
+    for target, per_row in factors.items():
+        medians, _, explanations = computed[target]
+        computed[target] = (
+            medians,
+            [round(v * f, 4) for v, f in zip(base[target], per_row, strict=True)],
+            [
+                {**(explanation or {}), "squad_factor": round(f, 4)}
+                for explanation, f in zip(explanations, per_row, strict=True)
+            ],
+        )
 
 
 async def _resolve_statuses(
@@ -682,12 +739,19 @@ async def predict_upcoming(
             "`euroleague-ai ml reconcile`"
         )
         reconciliation = None
+    stats_fit = load_stats_reconciliation()
+    if stats_fit is not None and not stats_fit.applies_to(models):
+        logger.warning(
+            "squad stat reconciliation is stale for the active models; run "
+            "`euroleague-ai ml reconcile`"
+        )
+        stats_fit = None
 
     total = 0
     for index, game in enumerate(games, start=1):
         total += await predict_game(
             session, game, models, clock=clock, settings=settings,
-            reconciliation=reconciliation,
+            reconciliation=reconciliation, stats_reconciliation=stats_fit,
         )
         await session.commit()
         logger.info(
@@ -706,6 +770,11 @@ async def predict_upcoming(
         "minutes_reconciliation": (
             f"alpha {reconciliation.alpha}, squads to {reconciliation.target_minutes:.1f} min"
             if reconciliation is not None
+            else "off"
+        ),
+        "stats_reconciliation": (
+            ", ".join(f"{t.name.lower()} alpha {a}" for t, (a, _) in stats_fit.targets.items())
+            if stats_fit is not None
             else "off"
         ),
     }

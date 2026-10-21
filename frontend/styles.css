@@ -324,7 +324,7 @@ tbody tr.doubtful td.plays { color: var(--warn); }
 .dist-scale { display: flex; justify-content: space-between; font-size: 0.7rem; color: var(--text-faint); margin-top: 2px; }
 
 .thresholds { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; }
-.threshold-row { display: grid; grid-template-columns: 52px 1fr 42px; align-items: center; gap: 10px; font-size: 0.8rem; }
+.threshold-row { display: grid; grid-template-columns: 52px 1fr minmax(42px, auto); align-items: center; gap: 10px; font-size: 0.8rem; }
 .threshold-label { color: var(--text-dim); }
 
 .drivers { display: flex; flex-direction: column; gap: 7px; }

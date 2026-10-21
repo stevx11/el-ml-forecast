@@ -92,8 +92,9 @@ euroleague-ai news injuries                                 # what was read: pub
 euroleague-ai news extract --replace --days 30              # re-read stored articles after a rules change
 euroleague-ai injuries report                               # read the daily injury table, record what changed
 euroleague-ai injuries list                                 # reports that apply to next games
+euroleague-ai injuries check --round 7                      # after a round: did ruled-out players sit, ready ones play?
 euroleague-ai injuries set Petrovic out --reason knee      # manual override (before T-60 min)
-euroleague-ai ml reconcile                                  # fit squad-minutes scaling (after each train)
+euroleague-ai ml reconcile                                  # fit squad minutes + stat-line scaling (after each train)
 euroleague-ai ml predict --days 7                           # project upcoming fixtures
 euroleague-ai ml why --game-code 120 --player petrovic      # explain one projection
 euroleague-ai ml score                                      # score finished games

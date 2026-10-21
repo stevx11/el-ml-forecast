@@ -38,9 +38,10 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, and_, func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from euroleague_ai.core.clock import Clock, SystemClock
 from euroleague_ai.core.logging import get_logger
@@ -289,6 +290,9 @@ async def accuracy_report(
 
     report["thresholds"] = await threshold_calibration(
         session, season_code=season_code, include_absent=include_absent
+    )
+    report["thresholds_overall"] = await overall_threshold_calibration(
+        session, season_code=season_code
     )
     report["availability"] = await availability_report(session, season_code=season_code)
     report["team_totals"] = await team_totals_report(session, season_code=season_code)
@@ -579,19 +583,69 @@ async def threshold_calibration(
     if not include_absent:
         stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
 
-    buckets: dict[tuple[float, float], list[int]] = {band: [0, 0] for band in PROBABILITY_BANDS}
+    return _bands(
+        (float(stated), float(actual) >= float(threshold))
+        for _target, probabilities, actual in (await session.execute(stmt)).all()
+        for threshold, stated in (probabilities or {}).items()
+    )
 
-    for _target, probabilities, actual in (await session.execute(stmt)).all():
-        for threshold, stated in (probabilities or {}).items():
-            probability = float(stated)
-            for band in PROBABILITY_BANDS:
-                low, high = band
-                # Upper-inclusive on the last band only, so 1.0 has a home.
-                if low <= probability < high or (high == 1.0 and probability == 1.0):
-                    buckets[band][0] += 1
-                    if float(actual) >= float(threshold):
-                        buckets[band][1] += 1
-                    break
+
+async def overall_threshold_calibration(
+    session: AsyncSession, *, season_code: str | None = None
+) -> list[dict[str, Any]]:
+    """The same test for the published *overall* chances: P(plays) x P(X+ | plays).
+
+    Every prediction counts here, including players who never appeared: a
+    player who sat did not reach 15, and the overall chance said how likely
+    that was. Each stat prediction is paired with the P(plays) row made for the
+    same player, game and cutoff (the newest, if a retrain left two).
+    """
+    plays = aliased(Prediction)
+    stmt = (
+        select(
+            Prediction.id,
+            Prediction.threshold_probabilities,
+            PredictionOutcome.actual_value,
+            plays.predicted_value,
+        )
+        .join(PredictionOutcome, PredictionOutcome.prediction_id == Prediction.id)
+        .join(Game, Game.id == Prediction.game_id)
+        .join(
+            plays,
+            and_(
+                plays.player_id == Prediction.player_id,
+                plays.game_id == Prediction.game_id,
+                plays.prediction_timestamp == Prediction.prediction_timestamp,
+                plays.target == PredictionTarget.PLAYS,
+            ),
+        )
+        .where(Prediction.threshold_probabilities.isnot(None))
+        .distinct(Prediction.id)
+        .order_by(Prediction.id, plays.created_at.desc())
+    )
+    if season_code:
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(
+            Season.code == season_code
+        )
+    return _bands(
+        (float(stated) * float(p_plays), float(actual) >= float(threshold))
+        for _id, probabilities, actual, p_plays in (await session.execute(stmt)).all()
+        for threshold, stated in (probabilities or {}).items()
+    )
+
+
+def _bands(pairs: Any) -> list[dict[str, Any]]:
+    """``(stated probability, happened)`` pairs into ten-point bands."""
+    buckets: dict[tuple[float, float], list[int]] = {band: [0, 0] for band in PROBABILITY_BANDS}
+    for probability, happened in pairs:
+        for band in PROBABILITY_BANDS:
+            low, high = band
+            # Upper-inclusive on the last band only, so 1.0 has a home.
+            if low <= probability < high or (high == 1.0 and probability == 1.0):
+                buckets[band][0] += 1
+                if happened:
+                    buckets[band][1] += 1
+                break
 
     return [
         {

@@ -103,6 +103,7 @@ def resolve_status(
     game_id: uuid.UUID,
     tip_off: datetime,
     last_played: datetime | None,
+    keep_available: bool = False,
 ) -> ResolvedStatus | None:
     """The newest report that still applies to this game, or ``None``.
 
@@ -110,6 +111,9 @@ def resolve_status(
         reports: This player's reports known at the cutoff, any order.
         last_played: Tip-off of his latest game with minutes, as known at the
             cutoff. Retires open-ended and dated reports made before it.
+        keep_available: Return an applicable "available" report instead of
+            ``None``. Predictions do not need it; checking a round afterwards
+            does ("ready" players should have played).
     """
     applicable: list[ResolvedStatus] = []
     for report in reports:
@@ -139,6 +143,8 @@ def resolve_status(
     )
     # A report that the player is fine clears whatever came before it, and is
     # not itself worth showing.
-    if newest.report.status in (AvailabilityStatus.AVAILABLE, AvailabilityStatus.UNKNOWN):
+    if newest.report.status is AvailabilityStatus.UNKNOWN:
+        return None
+    if newest.report.status is AvailabilityStatus.AVAILABLE and not keep_available:
         return None
     return newest

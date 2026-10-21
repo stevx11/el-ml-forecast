@@ -54,8 +54,11 @@ class TargetProjectionOut(BaseModel):
     expected_overall: float | None = None
     #: Predicted quantiles, e.g. ``{"0.1": 8.0, "0.5": 14.0, "0.9": 21.0}``.
     quantiles: dict[str, float] | None = None
-    #: ``{"15": 0.42}`` -- P(actual >= 15).
+    #: ``{"15": 0.42}`` -- P(actual >= 15) *if he plays*.
     threshold_probabilities: dict[str, float] | None = None
+    #: The same bars counting the chance he sits: P(plays) x P(>= bar | plays).
+    #: The honest number for a doubtful player. Null without a play probability.
+    threshold_probabilities_overall: dict[str, float] | None = None
     #: Robust standard deviation of the predicted distribution.
     predicted_std: float | None = None
     #: Relative tightness in (0, 1]. Null for models trained before item 06.

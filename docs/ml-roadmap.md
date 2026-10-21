@@ -207,6 +207,24 @@ capped excess spread over the rest of the side.
   thresholds untouched), and only for the model versions it was fitted on. Rerun it
   after every `ml train`.
 
+### Squad stat reconciliation
+
+The same idea for points, assists, rebounds and threes, except the squad target is
+not a constant. `ml/squad_stats.py` fits, per stat, a linear anchor for each side's
+total on the validation period: the squad's P(plays)-weighted expected sum plus
+team context known at the cutoff (expected team points and pace for points; the
+squad's expected points as well for assists; both squads' expected rebounds, both
+teams' rebounds per game, pace and the expected total for rebounds; threes attempted
+per game and pace for threes). Each side is scaled by `(A / S) ** alpha`, bounded to
+0.6-1.6.
+
+- **Fit:** the same `ml reconcile` run, written to `reconciliation/stats.json`.
+- **Gate, per stat:** test squad error must fall and player squared error must not be
+  significantly worse (paired, clustered by squad). A stat that fails stays off.
+- **Serving:** expected values only, after injury reports (a player ruled out drops
+  out of `S`, so teammates take his share) and minutes reconciliation. Each adjusted
+  line records its `squad_factor` in the explanation.
+
 **Gate:** beats baseline #5 on walk-forward MAE, on a held-out season, for every target.
 If it does not, the fix is features, not hyperparameters.
 

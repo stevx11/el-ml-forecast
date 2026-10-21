@@ -722,6 +722,70 @@ def cmd_injuries_report(
             typer.echo(f"    {name}")
 
 
+@injuries_app.command("check")
+def cmd_injuries_check(
+    round_number: Annotated[
+        int | None, typer.Option("--round", "-r", help="Check one round of the season.")
+    ] = None,
+    days: Annotated[int, typer.Option("--days", help="Otherwise, finished games in the last N days.")] = 7,
+    season: SeasonOption = "",
+    show_all: Annotated[bool, typer.Option("--all", help="List every player, not only mismatches.")] = False,
+) -> None:
+    """After a round: did the statuses the predictions used hold up?
+
+    Every player with a status in a finished game, grouped by what the
+    prediction used, against the box score. A ruled-out player who played, or a
+    ready player who did not, is a mismatch. Run after `ml score` (box scores
+    must be ingested).
+    """
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.ml.injury_check import check_games, finished_games
+
+    async def job() -> object:
+        async with session_scope() as session:
+            games = await finished_games(
+                session,
+                now=SystemClock().now(),
+                days=days,
+                round_number=round_number,
+                season_code=(season or _season_default()) if round_number is not None else None,
+            )
+            return await check_games(session, games)
+
+    result: Any = _run(job)
+    scope = f"round {round_number}" if round_number is not None else f"the last {days} day(s)"
+    if not result.players:
+        typer.echo(f"  no predicted players with a status in finished games from {scope}")
+        return
+    typer.echo("")
+    typer.secho(f"Injury statuses vs box scores - {result.games} game(s), {scope}", bold=True)
+    typer.echo(
+        f"  {'status used':<26}{'players':>8}{'played':>8}{'play rate':>11}{'mean P(plays)':>15}"
+        f"{'mismatches':>12}"
+    )
+    for group, row in result.summary().items():
+        bad = row["mismatches"]
+        typer.secho(
+            f"  {group:<26}{row['players']:>8}{row['played']:>8}{row['play_rate']:>10.0%} "
+            f"{row['mean_p_plays']:>14.2f}{bad if group in ('ruled out', 'ready') else '-':>12}",
+            fg=typer.colors.RED if bad else None,
+        )
+    listed = result.players if show_all else result.mismatches
+    if listed:
+        typer.echo("")
+        typer.echo("  every player:" if show_all else "  mismatches:")
+        for p in listed:
+            played = f"{p.minutes:.0f} min" if p.played else ("DNP" if p.dressed else "not dressed")
+            typer.secho(
+                f"    game {p.game_code:<5}{p.team:<5}{p.player:<28}{p.group:<26}{p.source.lower():<8}"
+                f"{played:<12}{(p.reason or '')[:60]}",
+                fg=typer.colors.RED if p.mismatch else None,
+            )
+    elif not show_all:
+        typer.secho("  no mismatches: every ruled-out player sat, every ready player played",
+                    fg=typer.colors.GREEN)
+
+
 @injuries_app.command("list")
 def cmd_injuries_list() -> None:
     """Reports that apply to each team's next game right now."""
@@ -1744,36 +1808,44 @@ def cmd_ml_reconcile(
         typer.Option("--save/--dry-run", help="Write the fit so predictions use it."),
     ] = True,
 ) -> None:
-    """Fit how hard to scale squad minutes toward what real squads play.
+    """Fit how hard to pull squad minutes and stat lines toward what real squads produce.
 
-    Uses the active MINUTES and P(plays) models on games neither has seen.
-    The strength is the strongest whose validation player minutes are no worse
-    than unscaled, and is judged on the test period: it switches on only if
-    squad totals get better there and player minutes are not significantly
-    worse (paired, clustered by squad). Run it again after every `ml train`.
+    Minutes: scaled toward what real squads play. Points, assists, rebounds and
+    threes: scaled toward a team-level anchor (expected team points, pace,
+    rebounding rates) fitted on past games. Uses the active models on games none
+    of them has seen. Each strength is the strongest whose validation player
+    error is no worse than unscaled, and is judged on the test period: it
+    switches on only if squad totals get better there and player error is not
+    significantly worse (paired, clustered by squad). Run it again after every
+    `ml train`.
     """
     from euroleague_ai.core.clock import SystemClock
     from euroleague_ai.ml.inference import load_active_models
     from euroleague_ai.ml.reconcile import fit_minutes_reconciliation, reconciliation_path
-    from euroleague_ai.models.enums import PredictionTarget
+    from euroleague_ai.ml.report import SERVED_TARGETS
+    from euroleague_ai.ml.squad_stats import fit_stats_reconciliation, stats_reconciliation_path
 
     async def job() -> object:
         async with session_scope() as session:
-            models = await load_active_models(
-                session, (PredictionTarget.MINUTES, PredictionTarget.PLAYS)
-            )
-            fit = await fit_minutes_reconciliation(
-                session, models=models, save=save, now=SystemClock().now()
-            )
-            return fit.to_dict()
+            models = await load_active_models(session, SERVED_TARGETS)
+            now = SystemClock().now()
+            fit = await fit_minutes_reconciliation(session, models=models, save=save, now=now)
+            try:
+                stats: object = (
+                    await fit_stats_reconciliation(session, models=models, save=save, now=now)
+                ).to_dict()
+            except ValueError as exc:
+                stats = str(exc)
+            return fit.to_dict(), stats
 
     try:
-        report = _run(job)
+        both: Any = _run(job)
     except ValueError as exc:
         typer.secho(f"  {exc}", fg=typer.colors.RED, bold=True)
         raise typer.Exit(code=1) from exc
 
-    r: dict[str, Any] = report  # type: ignore[assignment]
+    report, stats_report = both
+    r: dict[str, Any] = report
     typer.echo("")
     typer.secho(
         f"Squad minutes reconciliation - {r['minutes_model']} + {r['plays_model']}", bold=True
@@ -1819,8 +1891,51 @@ def cmd_ml_reconcile(
     )
     if save:
         typer.echo(f"  saved: {reconciliation_path()}")
-        if ok:
-            typer.echo("  next:  euroleague-ai ml predict --days 7")
+
+    _print_stats_reconciliation(stats_report, saved_to=stats_reconciliation_path() if save else None)
+    if save:
+        typer.echo("")
+        typer.echo("  next:  euroleague-ai ml predict --days 7")
+
+
+def _print_stats_reconciliation(report: Any, *, saved_to: Any) -> None:
+    typer.echo("")
+    if isinstance(report, str):
+        typer.secho(f"Squad stat reconciliation - not fitted: {report}", fg=typer.colors.YELLOW, bold=True)
+        return
+    models = report["models"]
+    typer.secho("Squad stat reconciliation - toward each side's expected team line", bold=True)
+    typer.echo(
+        f"  models: {', '.join(models[name] for name in ('POINTS', 'ASSISTS', 'REBOUNDS', 'THREE_POINTERS_MADE'))}"
+        f" + {models['PLAYS']}"
+    )
+    typer.echo(
+        f"  validation from {report['periods']['fit_start'][:10]}, "
+        f"test from {report['periods']['test_start'][:10]} (unseen by every model)"
+    )
+    typer.echo("")
+    typer.echo(
+        f"  {'stat':<9}{'alpha':>6}  {'squad error':>17}  {'squad bias':>17}  "
+        f"{'player RMSE':>17}  {'change in sq. err (SE)':>23}  result"
+    )
+    labels = {"POINTS": "points", "ASSISTS": "assists", "REBOUNDS": "rebounds",
+              "THREE_POINTERS_MADE": "threes"}
+    for name, fit in report["targets"].items():
+        base, new, delta = fit["test"]["unscaled"], fit["test"]["scaled"], fit["test"]["player_delta"]
+        ok = bool(fit["enabled"])
+        typer.secho(
+            f"  {labels.get(name, name):<9}{fit['alpha']:>6.1f}  "
+            f"{base['squad_mae']:>7.2f} -> {new['squad_mae']:<7.2f}  "
+            f"{base['squad_bias']:>+7.2f} -> {new['squad_bias']:<+7.2f}  "
+            f"{base['player_rmse']:>7.3f} -> {new['player_rmse']:<7.3f}  "
+            f"{delta['mean']:>+11.4f} ({delta['se']:.4f})  "
+            + ("ON" if ok else "OFF" + (f": {fit['note']}" if fit.get("note") else "")),
+            fg=typer.colors.GREEN if ok else typer.colors.YELLOW,
+        )
+    for name, why in (report.get("skipped") or {}).items():
+        typer.secho(f"  {labels.get(name, name):<9}skipped: {why}", fg=typer.colors.YELLOW)
+    if saved_to is not None:
+        typer.echo(f"  saved: {saved_to}")
 
 
 @ml_app.command("models")
@@ -1911,6 +2026,8 @@ def cmd_ml_predict(
         typer.echo(f"    {target:<24} {model}")
     if "minutes_reconciliation" in result:  # type: ignore[operator]
         typer.echo(f"    {'squad minutes':<24} {result['minutes_reconciliation']}")  # type: ignore[index]
+    if "stats_reconciliation" in result:  # type: ignore[operator]
+        typer.echo(f"    {'squad stats':<24} {result['stats_reconciliation']}")  # type: ignore[index]
     if result["games"] == 0:  # type: ignore[index]
         typer.secho(
             "  No scheduled games in the window. Ingest a season with upcoming\n"
@@ -2173,10 +2290,15 @@ def cmd_ml_accuracy(
             f"{block['bias']:>+9.3f}{cell}"
         )
 
-    bands = report.get("thresholds") or []  # type: ignore[union-attr]
-    if bands:
+    for key, title in (
+        ("thresholds", "Threshold calibration - P(X+) if he plays"),
+        ("thresholds_overall", "Threshold calibration - overall P(X+), sitting out counts as a miss"),
+    ):
+        bands = report.get(key) or []  # type: ignore[union-attr]
+        if not bands:
+            continue
         typer.echo("")
-        typer.secho("  Threshold calibration", bold=True)
+        typer.secho(f"  {title}", bold=True)
         typer.echo(f"  {'stated':<12}{'n':>8}{'realised':>11}{'drift':>9}")
         for band in bands:
             realised = band["realised"]

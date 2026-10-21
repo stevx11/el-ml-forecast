@@ -171,3 +171,11 @@ class TestNewsExpiry:
         report = _news(20)
         dated = replace(report, expected_return=TIP + timedelta(days=5))
         assert resolve_status([dated], game_id=GAME, tip_off=TIP, last_played=None) is not None
+
+
+class TestKeepAvailable:
+    def test_ready_is_returned_only_when_asked(self) -> None:
+        ready = _report(AvailabilityStatus.AVAILABLE, days_before=1, game=GAME)
+        assert resolve_status([ready], game_id=GAME, tip_off=TIP, last_played=None) is None
+        kept = resolve_status([ready], game_id=GAME, tip_off=TIP, last_played=None, keep_available=True)
+        assert kept is not None and kept.report.status is AvailabilityStatus.AVAILABLE

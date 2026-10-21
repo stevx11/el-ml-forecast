@@ -362,17 +362,19 @@ function renderGame() {
       <th>Player</th>
       <th class="sortable" data-sort="PLAYS"
           aria-sort="${key === "PLAYS" ? (dir === "desc" ? "descending" : "ascending") : "none"}"
-          title="Probability he takes the floor at all. Every column to the right assumes he does.">Plays</th>
+          title="Probability he takes the floor at all. The stat columns assume he does; P(15+) counts both.">Plays</th>
       ${TARGETS.map((t) => `<th class="sortable" data-sort="${t.key}"
           aria-sort="${key === t.key ? (dir === "desc" ? "descending" : "ascending") : "none"}"
           title="${esc(t.label)}">${t.short}</th>`).join("")}
-      <th title="Probability of scoring 15 or more">P(15+)</th>
+      <th title="Chance of scoring 15 or more, counting the chance he does not play">P(15+)</th>
       <th title="How tight this projection is relative to a typical one">Conf</th>
     </tr></thead><tbody>`;
 
   for (const player of players) {
     const points = player.projections?.POINTS;
-    const p15 = points?.threshold_probabilities?.["15"];
+    // Overall chance: a doubtful player's 15+ is mostly whether he plays.
+    const p15 = points?.threshold_probabilities_overall?.["15"]
+      ?? points?.threshold_probabilities?.["15"];
     const confidence = points?.confidence ?? player.projections?.MINUTES?.confidence;
     const band = confidenceBand(confidence);
     const plays = player.play_probability;
@@ -555,16 +557,27 @@ function openDrawer(playerId) {
 
     const thresholds = projection.threshold_probabilities;
     if (thresholds && Object.keys(thresholds).length) {
+      const overall = projection.threshold_probabilities_overall;
+      // Only worth a second column when sitting out is a real possibility.
+      const showOverall = overall && player.play_probability != null && player.play_probability < 0.995;
       html += `<div class="thresholds">`;
+      if (showOverall) {
+        html += `<div class="threshold-row faint">
+          <span></span><span></span>
+          <span style="text-align:right" title="Left: if he plays. Right: counting the chance he does not play.">if he plays · overall</span>
+        </div>`;
+      }
       for (const [bar, probability] of Object.entries(thresholds).sort(
         (a, b) => Number(a[0]) - Number(b[0])
       )) {
+        const all = showOverall ? overall[bar] : null;
         html += `<div class="threshold-row">
           <span class="threshold-label num">${esc(bar)}+</span>
           <span class="prob-track" style="width:100%">
             <span class="prob-fill" style="width:${Math.round(probability * 100)}%"></span>
           </span>
-          <span class="num" style="text-align:right">${pct(probability)}</span>
+          <span class="num" style="text-align:right">${pct(probability)}${
+            all != null ? ` <span class="faint">· ${pct(all)}</span>` : ""}</span>
         </div>`;
       }
       html += `</div>`;
@@ -742,12 +755,15 @@ async function loadAccuracy() {
     }
   }
 
-  const bands = report.thresholds || [];
-  if (bands.length) {
-    html += `<div class="section-title">Threshold calibration</div>
-      <p class="muted" style="margin:-4px 0 12px">
-        Of everything we called 30%, did about 30% happen? This needs no model — just counting.
-      </p>
+  for (const [bands, title, note] of [
+    [report.thresholds || [], "Threshold calibration — if he plays",
+      "Of everything we called 30%, did about 30% happen? This needs no model — just counting."],
+    [report.thresholds_overall || [], "Threshold calibration — overall",
+      "The board's P(15+): it counts the chance he sits, so a player who did not play is a miss."],
+  ]) {
+    if (!bands.length) continue;
+    html += `<div class="section-title">${esc(title)}</div>
+      <p class="muted" style="margin:-4px 0 12px">${esc(note)}</p>
       <div class="table-wrap"><table>
         <thead><tr><th>Stated</th><th>Predictions</th><th>Realised</th><th>Drift</th></tr></thead>
         <tbody>`;

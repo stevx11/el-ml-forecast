@@ -128,9 +128,13 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
 def _expected_lines(
     projections: dict[uuid.UUID, PlayerProjectionOut],
 ) -> dict[str, dict[str, float]]:
-    """Fill ``expected_overall`` for every projection and sum squads.
+    """Fill ``expected_overall`` and the overall threshold chances, and sum squads.
 
     ``expected_overall`` needs both an expected value and a play probability.
+    ``threshold_probabilities_overall`` multiplies each "if he plays" chance by
+    P(plays): a player who scores 15+ half the time he plays, and plays half the
+    time, scores 15+ in a quarter of games. It is derived here rather than
+    stored, so scoring and calibration keep judging the conditional numbers.
     The squad total degrades gracefully instead: it uses the best number each
     player has (expected x P, else expected, else median), so a squad total is
     always shown and gets more realistic as the pieces arrive.
@@ -143,6 +147,11 @@ def _expected_lines(
                 continue
             if detail.expected is not None and plays is not None:
                 detail.expected_overall = round(detail.expected * plays, 4)
+            if detail.threshold_probabilities and plays is not None:
+                detail.threshold_probabilities_overall = {
+                    bar: round(float(p) * plays, 4)
+                    for bar, p in detail.threshold_probabilities.items()
+                }
             best = (
                 detail.expected_overall
                 if detail.expected_overall is not None
