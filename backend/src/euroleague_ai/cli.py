@@ -283,6 +283,14 @@ def cmd_features_backfill(
         int | None,
         typer.Option("--limit", help="Stop after N games. Use for a smoke run first."),
     ] = None,
+    candidates: Annotated[
+        bool,
+        typer.Option(
+            "--candidates/--no-candidates",
+            help="Also snapshot roster candidates who did not play. The "
+            "play-probability model needs these rows.",
+        ),
+    ] = True,
 ) -> None:
     """Build feature snapshots across finished games.
 
@@ -311,6 +319,7 @@ def cmd_features_backfill(
                 min_round=min_round,
                 limit=limit,
                 settings=settings,
+                include_candidates=candidates,
             )
 
     _report("snapshots", _run(job))
@@ -685,6 +694,11 @@ def cmd_ml_baselines(
         except KeyError as exc:
             valid = ", ".join(t.name for t in PredictionTarget)
             raise typer.BadParameter(f"unknown target {target!r}. Valid: {valid}") from exc
+        if targets[0] is PredictionTarget.PLAYS:
+            raise typer.BadParameter(
+                "PLAYS is a classifier with its own baselines; they are reported by "
+                "`euroleague-ai ml train --target PLAYS`."
+            )
     else:
         targets = DEFAULT_TARGETS
 
@@ -1100,11 +1114,80 @@ def cmd_ml_chain(
         )
 
 
+def _print_availability_block(block: dict[str, Any]) -> bool:
+    """Render the PLAYS training report. Returns whether it passed the gate."""
+    s = block["summary"]
+    model, base = s["model"], s["baseline_metrics"]
+    data = block.get("dataset", {})
+    ok = bool(s["beats_baseline"])
+
+    def fmt(value: object, spec: str = ".4f") -> str:
+        return "n/a" if value is None else format(value, spec)
+
+    typer.secho("  PLAYS  (probability of taking the floor)", fg=typer.colors.CYAN, bold=True)
+    typer.echo(
+        f"    rows         {data.get('rows', 0):,} candidates over {data.get('games', 0):,} games, "
+        f"{fmt(data.get('base_rate'), '.1%')} played"
+    )
+    typer.echo(
+        f"                 {data.get('dressed_not_used', 0):,} dressed but unused, "
+        f"{data.get('not_in_squad', 0):,} not in the squad"
+    )
+    typer.echo(
+        f"    model        log loss {fmt(model['log_loss'])}   Brier {fmt(model['brier'])}   "
+        f"AUC {fmt(model['auc'], '.3f')}   ECE {fmt(model['ece'], '.3f')}"
+    )
+    typer.echo(
+        f"    baseline     log loss {fmt(base['log_loss'])}   Brier {fmt(base['brier'])}   "
+        f"({s['baseline']})"
+    )
+    typer.secho(
+        f"    improvement  {fmt(s['improvement_pct'], '+.2f')}%   "
+        f"{'PASS' if ok else 'FAIL - not activated'}",
+        fg=typer.colors.GREEN if ok else typer.colors.RED,
+        bold=True,
+    )
+    typer.echo(
+        f"    players used per team-game: off by {fmt(model['team_count_mae'], '.2f')} "
+        f"on average (bias {fmt(model['team_count_bias'], '+.2f')})"
+    )
+    by_outcome = block.get("by_outcome") or {}
+    if by_outcome:
+        typer.echo(
+            "    mean P(plays) by what happened: "
+            + ", ".join(
+                f"{key.replace('_', ' ')} {fmt(value.get('mean_predicted'), '.2f')}"
+                for key, value in by_outcome.items()
+            )
+        )
+    recall = data.get("candidate_recall")
+    if recall is not None and recall < 0.98:
+        typer.secho(
+            f"    candidate list caught {recall:.1%} of players who played; the rest are "
+            "never projected at all",
+            fg=typer.colors.YELLOW,
+        )
+    if data.get("missing_snapshots"):
+        typer.secho(
+            f"    {data['missing_snapshots']:,} candidates had no snapshot and were skipped. "
+            "Run `euroleague-ai features backfill` to add them.",
+            fg=typer.colors.YELLOW,
+        )
+    typer.echo("    top features: " + ", ".join(n for n, _ in block["top_features"][:5]))
+    typer.echo(f"    artifact:     {block['model']['artifact']}")
+    return ok
+
+
 @ml_app.command("train")
 def cmd_ml_train(
     target: Annotated[
         str | None,
-        typer.Option("--target", "-t", help="Single target. Default: all five."),
+        typer.Option(
+            "--target",
+            "-t",
+            help="Single target, e.g. POINTS or PLAYS. Default: all five stat "
+            "targets, then PLAYS.",
+        ),
     ] = None,
     start: Annotated[int | None, typer.Option("--from", help="First season start year.")] = None,
     end: Annotated[int | None, typer.Option("--to", help="Last season start year.")] = None,
@@ -1122,10 +1205,13 @@ def cmd_ml_train(
     the best baseline on exactly those rows. A model that does not beat its
     baseline is registered but never activated -- a model worse than arithmetic
     is a liability, not an improvement.
+
+    PLAYS, the probability that a player takes the floor at all, is judged on
+    log loss against appearance-rate baselines rather than on MAE.
     """
     from euroleague_ai.models.enums import PredictionTarget
     from euroleague_ai.ml.pipeline import train_and_register
-    from euroleague_ai.ml.report import DEFAULT_TARGETS
+    from euroleague_ai.ml.report import SERVED_TARGETS
 
     if target:
         try:
@@ -1134,7 +1220,7 @@ def cmd_ml_train(
             valid = ", ".join(t.name for t in PredictionTarget)
             raise typer.BadParameter(f"unknown target {target!r}. Valid: {valid}") from exc
     else:
-        targets = DEFAULT_TARGETS
+        targets = SERVED_TARGETS
 
     codes: list[str] | None = None
     if start is not None or end is not None:
@@ -1157,6 +1243,11 @@ def cmd_ml_train(
         if "error" in block:
             typer.secho(f"  {name}: {block['error']}", fg=typer.colors.RED)
             failed += 1
+            continue
+
+        if name == str(PredictionTarget.PLAYS):
+            ok = _print_availability_block(block)
+            passed, failed = (passed + 1, failed) if ok else (passed, failed + 1)
             continue
 
         s = block["summary"]
@@ -1404,13 +1495,16 @@ def cmd_ml_show(
     typer.echo("")
     typer.secho(f"  tip-off {data['tip_off']}", bold=True)  # type: ignore[index]
     typer.echo(
-        f"  {'player':<28}{'MIN':>7}{'PTS':>7}{'REB':>7}{'AST':>7}{'3PM':>7}"
+        f"  {'player':<28}{'play':>6}{'MIN':>7}{'PTS':>7}{'REB':>7}{'AST':>7}{'3PM':>7}"
         f"{'conf':>7}   pts 10/15/20/25"
     )
     for name, values in sorted(
         players.items(), key=lambda kv: -kv[1].get("MINUTES", 0.0)
     ):
         cells = "".join(f"{values.get(t, float('nan')):>7.1f}" for t in order)
+        # P(plays) first: every number to its right is conditional on it.
+        plays = values.get("PLAYS")
+        play_cell = "     -" if plays is None else f"{plays:>6.0%}"
 
         confidence = values.get("confidence")
         conf_cell = "      -" if confidence is None else f"{confidence:>7.2f}"
@@ -1426,7 +1520,7 @@ def cmd_ml_show(
             )
             or "-"
         )
-        typer.echo(f"  {name:<28}{cells}{conf_cell}   {odds}")
+        typer.echo(f"  {name:<28}{play_cell}{cells}{conf_cell}   {odds}")
 
     if not any(v.get("POINTS_q") for v in players.values()):
         typer.secho(
@@ -1691,7 +1785,7 @@ def cmd_ml_roster(
     from euroleague_ai.models.competition import Season, Team
     from euroleague_ai.models.game import Game
     from euroleague_ai.models.people import Player, PlayerTeamStint
-    from euroleague_ai.ml.inference import candidate_players, current_club
+    from euroleague_ai.repositories.rosters import candidate_players, current_club
 
     async def job() -> object:
         settings = get_settings()

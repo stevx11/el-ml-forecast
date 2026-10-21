@@ -36,11 +36,27 @@ async def train_and_register(
     """Train each target in order and register the results.
 
     Targets are trained in the order given -- minutes first by default, because
-    every other box score quantity is conditional on playing time.
+    every other box score quantity is conditional on playing time. ``PLAYS``, if
+    requested, is routed to the availability trainer, whose report has a
+    different shape (log loss and calibration rather than MAE).
     """
     report: dict[str, Any] = {"feature_set_version": feature_set_version, "targets": {}}
 
     for target in targets:
+        if target is PredictionTarget.PLAYS:
+            # A classifier over the roster-candidate population, with its own
+            # loader, metrics and gate. See ml.availability.
+            from euroleague_ai.ml.availability import train_and_register_availability
+
+            report["targets"][str(target)] = await train_and_register_availability(
+                session,
+                season_codes=season_codes,
+                feature_set_version=feature_set_version,
+                artifact_root=artifact_root,
+                activate=activate,
+            )
+            continue
+
         rows = await load_training_rows(
             session,
             target=target,

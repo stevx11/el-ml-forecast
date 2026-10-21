@@ -289,6 +289,19 @@ function renderGame() {
     </div>`;
   }
 
+  // Expected number of players used per squad: the sum of P(plays). The quickest
+  // sanity check on a projection, since a real rotation is 9-11 players.
+  const expectedUsed = {};
+  for (const p of data.players) {
+    if (p.play_probability == null || !p.team_code) continue;
+    expectedUsed[p.team_code] = (expectedUsed[p.team_code] ?? 0) + p.play_probability;
+  }
+  if (Object.keys(expectedUsed).length) {
+    html += `<p class="muted expected-used">Expected to play: ${Object.entries(expectedUsed)
+      .map(([code, n]) => `<strong>${esc(code)}</strong> ${fmt(n, 1)}`)
+      .join(" · ")} players</p>`;
+  }
+
   const players = data.players.filter(
     (p) => state.squadFilter === "all" || p.team_code === state.squadFilter
   );
@@ -303,6 +316,9 @@ function renderGame() {
   html += `<div class="table-wrap"><table>
     <thead><tr>
       <th>Player</th>
+      <th class="sortable" data-sort="PLAYS"
+          aria-sort="${key === "PLAYS" ? (dir === "desc" ? "descending" : "ascending") : "none"}"
+          title="Probability he takes the floor at all. Every column to the right assumes he does.">Plays</th>
       ${TARGETS.map((t) => `<th class="sortable" data-sort="${t.key}"
           aria-sort="${key === t.key ? (dir === "desc" ? "descending" : "ascending") : "none"}"
           title="${esc(t.label)}">${t.short}</th>`).join("")}
@@ -315,12 +331,17 @@ function renderGame() {
     const p15 = points?.threshold_probabilities?.["15"];
     const confidence = points?.confidence ?? player.projections?.MINUTES?.confidence;
     const band = confidenceBand(confidence);
+    const plays = player.play_probability;
+    // Below even odds the line is a projection for a game he probably sits out,
+    // so it is dimmed rather than presented at full weight.
+    const doubtful = plays != null && plays < 0.5;
 
-    html += `<tr data-player="${esc(player.player_id)}">
+    html += `<tr data-player="${esc(player.player_id)}"${doubtful ? ' class="doubtful"' : ""}>
       <td><div class="player-cell">
         ${player.team_code ? `<span class="team-tag">${esc(player.team_code)}</span>` : ""}
         <span class="player-name" title="${esc(player.player_name)}">${esc(player.player_name)}</span>
       </div></td>
+      <td class="num plays">${plays == null ? "–" : pct(plays)}</td>
       ${TARGETS.map((t) => {
         const value = player.targets?.[t.key];
         const lead = t.key === "MINUTES" || t.key === "POINTS" ? " lead" : "";
@@ -337,6 +358,7 @@ function renderGame() {
   }
   html += `</tbody></table></div>
     <p class="faint" style="margin-top:10px">
+      Stat columns are projections <em>if he plays</em>; dimmed rows are players more likely to sit out.
       Select a player for the full distribution, threshold probabilities and the reasons behind the projection.
       Confidence is relative to a typical projection, not an absolute probability.
     </p>`;
@@ -371,6 +393,32 @@ function openDrawer(playerId) {
     `${player.team_code || ""} · projected ${new Date(player.prediction_timestamp).toLocaleString()}`;
 
   let html = "";
+  const plays = player.projections?.PLAYS;
+  if (plays) {
+    html += `<div class="target-block">
+      <div class="target-head">
+        <span class="target-name">Chance he plays</span>
+        <span class="target-value num">${pct(plays.value)}</span>
+      </div>
+      <span class="prob-track" style="width:100%;display:block">
+        <span class="prob-fill" style="display:block;width:${Math.round(plays.value * 100)}%"></span>
+      </span>
+      <p class="faint" style="margin-top:8px">Every projection below assumes he takes the floor.</p>`;
+    if (plays.drivers?.length) {
+      html += `<div class="drivers" style="margin-top:10px">`;
+      for (const driver of plays.drivers) {
+        const positive = driver.direction === "+";
+        html += `<div class="driver ${positive ? "pos" : "neg"}">
+          <span class="driver-sign">${positive ? "+" : "−"}</span>
+          <span>${esc(driver.label)}</span>
+          <span class="driver-impact num"></span>
+        </div>`;
+      }
+      html += `</div>`;
+    }
+    html += `</div>`;
+  }
+
   for (const target of TARGETS) {
     const projection = player.projections?.[target.key];
     if (!projection) continue;
@@ -531,6 +579,46 @@ async function loadAccuracy() {
     </div>`;
   }
   html += `</div>`;
+
+  const availability = report.availability;
+  if (availability?.scored) {
+    html += `<div class="section-title">Who plays</div>
+      <p class="muted" style="margin:-4px 0 12px">
+        The chance each projected player takes the floor, scored on every projection —
+        including the players who did not appear.
+      </p>
+      <div class="cards">
+        <div class="card">
+          <div class="card-label">Brier score</div>
+          <div class="card-value num">${fmt(availability.brier, 3)}</div>
+          <div class="card-note">over ${availability.scored.toLocaleString()} players ·
+            ${pct(availability.base_rate)} played, ${pct(availability.mean_predicted)} predicted</div>
+        </div>
+        <div class="card">
+          <div class="card-label">Players used per team</div>
+          <div class="card-value num">±${fmt(availability.team_count_mae, 2)}</div>
+          <div class="card-note">expected vs actual rotation size ·
+            bias ${availability.team_count_bias > 0 ? "+" : ""}${fmt(availability.team_count_bias, 2)}</div>
+        </div>
+      </div>`;
+    const reliability = availability.reliability || [];
+    if (reliability.length) {
+      html += `<div class="table-wrap" style="margin-bottom:20px"><table>
+        <thead><tr><th>Stated</th><th>Players</th><th>Mean stated</th><th>Played</th></tr></thead>
+        <tbody>`;
+      for (const row of reliability) {
+        const drift = row.realised - row.mean_predicted;
+        const colour = Math.abs(drift) > 0.1 ? "var(--warn)" : "var(--text-dim)";
+        html += `<tr style="cursor:default">
+          <td>${esc(row.band)}</td>
+          <td class="num">${row.rows.toLocaleString()}</td>
+          <td class="num">${pct(row.mean_predicted)}</td>
+          <td class="num" style="color:${colour}">${pct(row.realised)}</td>
+        </tr>`;
+      }
+      html += `</tbody></table></div>`;
+    }
+  }
 
   const bands = report.thresholds || [];
   if (bands.length) {

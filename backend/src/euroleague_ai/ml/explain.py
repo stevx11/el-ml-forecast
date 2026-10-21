@@ -138,6 +138,28 @@ _PHRASES: dict[str, tuple[str, str]] = {
     "other": ("Other factors", "Other factors"),
 }
 
+#: Phrasing for the play-probability model. Same themes, different question:
+#: the stat phrases describe a bigger or smaller *line*, which reads wrongly next
+#: to "will he play at all". A blowout is the clearest case. It shortens a stat
+#: line but *raises* the chance that a twelfth man gets on the floor.
+PLAYS_PHRASES: dict[str, tuple[str, str]] = {
+    "minutes": ("Regular minutes recently", "Few minutes recently"),
+    "position": ("Secure place at his position", "Crowded at his position"),
+    "form": ("Productive recently", "Quiet recently"),
+    "role": ("Established rotation role", "Fringe rotation role"),
+    "schedule": ("Played recently", "Long gap since his last game"),
+    "opponent": ("Matchup favours a deep rotation", "Matchup favours a short rotation"),
+    "team": ("Team context favours playing", "Team context against playing"),
+    "game_script": ("Game script favours a deep rotation", "Game script favours a short rotation"),
+    "teammates": ("Recent appearances point to playing", "Recent absences point to sitting out"),
+    "experience": ("Established EuroLeague record", "Little EuroLeague history"),
+    "other": ("Other factors", "Other factors"),
+}
+
+#: The play-probability model explains in log-odds, where 0.05 is invisible. A
+#: tenth of a log-odd is roughly two percentage points around 85%.
+PLAYS_MIN_IMPACT = 0.1
+
 #: How many drivers to publish. Three is what fits next to a projection without
 #: turning it into an essay, and beyond the third the contributions are usually
 #: too small to be worth a sentence.
@@ -159,9 +181,12 @@ def theme_for(feature_name: str) -> str:
     return "other"
 
 
-def phrase_for(theme: str, impact: float) -> str:
+def phrase_for(
+    theme: str, impact: float, phrases: dict[str, tuple[str, str]] | None = None
+) -> str:
     """Readable label for a signed theme contribution."""
-    positive, negative = _PHRASES.get(theme, _PHRASES["other"])
+    table = phrases or _PHRASES
+    positive, negative = table.get(theme, table.get("other", _PHRASES["other"]))
     return positive if impact >= 0 else negative
 
 
@@ -194,6 +219,9 @@ def explain_prediction(
     calibration_offset: float = 0.0,
     top_n: int = TOP_DRIVERS,
     top_features: int = 8,
+    phrases: dict[str, tuple[str, str]] | None = None,
+    min_impact: float = MIN_IMPACT,
+    scale: str | None = None,
 ) -> dict[str, Any]:
     """Build the stored explanation for one prediction.
 
@@ -205,6 +233,11 @@ def explain_prediction(
         calibration_offset: Recorded so the arithmetic reconciles. Base plus all
             contributions plus the offset is the served prediction, before the
             clip at zero -- without it the numbers appear not to add up.
+        phrases: Per-theme wording, for a target that asks a different
+            question (see :data:`PLAYS_PHRASES`).
+        min_impact: Smallest theme total worth a sentence, in model units.
+        scale: Recorded when contributions are not in the target's own units,
+            e.g. ``"log_odds"`` for the play-probability model.
 
     Returns:
         A JSON-serialisable dict with readable drivers, every theme total, and
@@ -217,11 +250,11 @@ def explain_prediction(
         {
             "theme": theme,
             "direction": "+" if impact >= 0 else "-",
-            "label": phrase_for(theme, impact),
+            "label": phrase_for(theme, impact, phrases),
             "impact": round(impact, 3),
         }
         for theme, impact in ranked[:top_n]
-        if abs(impact) >= MIN_IMPACT
+        if abs(impact) >= min_impact
     ]
 
     raw = sorted(
@@ -229,7 +262,7 @@ def explain_prediction(
         key=lambda item: -abs(item[1]),
     )
 
-    return {
+    explanation: dict[str, Any] = {
         "base_value": round(float(base_value), 3),
         "calibration_offset": round(float(calibration_offset), 3),
         "drivers": drivers,
@@ -238,6 +271,9 @@ def explain_prediction(
         # has to work out why the prose says something surprising.
         "top_features": [[name, round(float(value), 3)] for name, value in raw[:top_features]],
     }
+    if scale is not None:
+        explanation["scale"] = scale
+    return explanation
 
 
 def render_drivers(explanation: dict[str, Any] | None) -> str:

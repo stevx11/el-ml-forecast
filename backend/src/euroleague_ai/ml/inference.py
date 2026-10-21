@@ -5,15 +5,9 @@ appeared. An upcoming game has no box score, so inference needs a different way
 to decide *who to predict for*.
 
 **Roster resolution must be transfer-aware.** Candidates come from the stint
-intervals, but "registered to this club in this season" is not sufficient: across
-a transfer window a player can hold a registration for the season just finished
-*and* one for the season starting, at different clubs. Filtering by season alone
-returns both, and the player gets projected for a club he has left.
-
-:func:`current_club` resolves it properly -- among registrations in effect at the
-cutoff, the latest ``effective_from`` wins. The set is then narrowed to players
-who have featured recently *in this season*, which drops the never-dressed tail
-without discarding summer signings who have not debuted.
+intervals, resolved by :mod:`euroleague_ai.repositories.rosters` -- the same code
+the snapshot backfill uses, so the play-probability model is trained on exactly
+the population it is served on. See that module for the transfer-window rules.
 
 **The cutoff is the same one training used.** ``tip_off - PREDICTION_LEAD_MINUTES``.
 That is not a detail -- if inference computed features closer to tip-off than
@@ -37,28 +31,24 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from euroleague_ai.core.clock import Clock, SystemClock, ensure_utc
+from euroleague_ai.core.clock import Clock, SystemClock
 from euroleague_ai.core.config import Settings, get_settings
 from euroleague_ai.core.errors import NotFoundError
 from euroleague_ai.core.logging import get_logger
 from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features
 from euroleague_ai.ml.distribution import ResidualDistribution, thresholds_for
-from euroleague_ai.ml.explain import explain_prediction
+from euroleague_ai.ml.explain import PLAYS_MIN_IMPACT, PLAYS_PHRASES, explain_prediction
 from euroleague_ai.ml.registry import distribution_path
 from euroleague_ai.features.snapshot import default_prediction_timestamp
 from euroleague_ai.models.enums import GameStatus, PredictionTarget
 from euroleague_ai.models.features import PlayerFeatureSnapshot
-from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats
-from euroleague_ai.models.people import PlayerTeamStint
+from euroleague_ai.models.game import Game
 from euroleague_ai.models.prediction import ModelVersion, Prediction
 from euroleague_ai.ml.matrix import features_to_matrix
 from euroleague_ai.ml.registry import active_model
+from euroleague_ai.repositories.rosters import candidate_players, current_club
 
 logger = get_logger(__name__)
-
-#: A rostered player must have appeared in at least one of the team's last N
-#: games to be predicted. Filters out the registered-but-never-dressed tail.
-RECENT_APPEARANCE_GAMES = 5
 
 
 @dataclass(slots=True)
@@ -89,7 +79,15 @@ class LoadedModel:
             return []
         x = features_to_matrix(feature_dicts, self.feature_names)
         raw = self.booster.predict(x)
+        if self.is_probability:
+            # A probability is never shifted, only kept inside [0, 1].
+            return [min(1.0, max(0.0, float(value))) for value in raw]
         return [max(0.0, float(value) + self.calibration_offset) for value in raw]
+
+    @property
+    def is_probability(self) -> bool:
+        """``True`` for the play-probability classifier, whose output is P(plays)."""
+        return self.target is PredictionTarget.PLAYS
 
     def explain_batch(
         self, feature_dicts: list[dict[str, Any]]
@@ -119,6 +117,21 @@ class LoadedModel:
                     f"pred_contrib returned {len(values)} columns for "
                     f"{width} features; expected {width + 1}"
                 )
+            if self.is_probability:
+                # Binary boosters attribute in log-odds, not in probability, so
+                # the totals are recorded with their scale and phrased for the
+                # question this model answers.
+                explanations.append(
+                    explain_prediction(
+                        self.feature_names,
+                        values[:width],
+                        base_value=values[width],
+                        phrases=PLAYS_PHRASES,
+                        min_impact=PLAYS_MIN_IMPACT,
+                        scale="log_odds",
+                    )
+                )
+                continue
             explanations.append(
                 explain_prediction(
                     self.feature_names,
@@ -241,164 +254,6 @@ async def load_active_models(
             extra={"stale": "; ".join(stale), "current_feature_set": FEATURE_SET_VERSION},
         )
     return loaded
-
-
-async def current_club(
-    session: AsyncSession, *, as_of: datetime
-) -> dict[uuid.UUID, uuid.UUID]:
-    """Map every player to the club they belonged to at ``as_of``.
-
-    **This is the transfer-aware answer, and it has to be.** Scoping roster
-    lookups to a single season is wrong across a transfer window: in pre-season
-    a player can hold a registration for the season just finished *and* one for
-    the season about to start, at different clubs. Filtering by season alone
-    happily returns both, and a player ends up projected for a club he left.
-
-    The rule is one line: among the registrations in effect at ``as_of``, the one
-    with the latest ``effective_from`` wins. A July move to Real Madrid
-    supersedes a registration at Partizan that nominally runs to 30 June, because
-    it started later.
-
-    Resolved in Python rather than SQL because the working set is a few thousand
-    stints and the tie-breaking is far easier to read -- and to get right -- as
-    explicit code.
-    """
-    as_of = ensure_utc(as_of, field="as_of")
-
-    rows = (
-        await session.execute(
-            select(
-                PlayerTeamStint.player_id,
-                PlayerTeamStint.team_id,
-                PlayerTeamStint.effective_from,
-                PlayerTeamStint.observed_at,
-            ).where(
-                PlayerTeamStint.observed_at <= as_of,
-                PlayerTeamStint.effective_from <= as_of,
-                (PlayerTeamStint.effective_until.is_(None))
-                | (PlayerTeamStint.effective_until > as_of),
-            )
-        )
-    ).all()
-
-    best: dict[uuid.UUID, tuple[datetime, datetime, uuid.UUID]] = {}
-    for player_id, team_id, effective_from, observed_at in rows:
-        key = (effective_from, observed_at, team_id)
-        current = best.get(player_id)
-        # Latest registration wins; observed_at breaks ties, so a correction
-        # ingested later supersedes the row it corrects.
-        if current is None or key[:2] > current[:2]:
-            best[player_id] = key
-
-    return {player_id: value[2] for player_id, value in best.items()}
-
-
-async def candidate_players(
-    session: AsyncSession,
-    *,
-    team_id: uuid.UUID,
-    season_id: uuid.UUID,
-    as_of: datetime,
-    club_by_player: dict[uuid.UUID, uuid.UUID] | None = None,
-) -> list[uuid.UUID]:
-    """Players plausibly available for this team at ``as_of``.
-
-    Two filters, in this order:
-
-    1. **Club membership**, resolved by :func:`current_club`. A player whose
-       latest registration is at another club is excluded outright, whatever the
-       appearance history says.
-    2. **Recent appearances in this season**, to drop the registered-but-never-
-       dressed tail. Skipped before a season's first games, when there is nothing
-       to filter on.
-
-    The season scope on the appearance filter is load-bearing. Without it, "the
-    team's last five games" reaches back into the previous season, and a squad
-    that has since been rebuilt gets projected as though nobody moved.
-    """
-    as_of = ensure_utc(as_of, field="as_of")
-
-    if club_by_player is None:
-        club_by_player = await current_club(session, as_of=as_of)
-
-    rostered = {
-        player_id
-        for player_id, club_id in club_by_player.items()
-        if club_id == team_id
-    }
-    if not rostered:
-        return []
-
-    recent_games = (
-        select(Game.id)
-        .join(GameTeam, GameTeam.game_id == Game.id)
-        .where(
-            GameTeam.team_id == team_id,
-            # Same season only. Cross-season appearance history describes a squad
-            # that no longer exists.
-            Game.season_id == season_id,
-            Game.observed_at <= as_of,
-            Game.tip_off_utc < as_of,
-            Game.status == GameStatus.FINISHED,
-        )
-        .order_by(Game.tip_off_utc.desc())
-        .limit(RECENT_APPEARANCE_GAMES)
-        .subquery()
-    )
-
-    appeared = set(
-        (
-            await session.execute(
-                select(PlayerGameStats.player_id)
-                .join(GameTeam, GameTeam.id == PlayerGameStats.game_team_id)
-                .where(
-                    GameTeam.team_id == team_id,
-                    GameTeam.game_id.in_(select(recent_games.c.id)),
-                    PlayerGameStats.observed_at <= as_of,
-                    PlayerGameStats.did_not_play.is_(False),
-                )
-                .distinct()
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    if not appeared:
-        # No games played in this season yet. The roster is all we have, and it
-        # is already club-correct.
-        return sorted(rostered)
-
-    # Everyone who has featured for this club at any point this season. Used to
-    # tell "fringe player who keeps being left out" apart from "signing who has
-    # not debuted yet" -- the appearance filter should drop the former, never the
-    # latter.
-    debuted = set(
-        (
-            await session.execute(
-                select(PlayerGameStats.player_id)
-                .join(GameTeam, GameTeam.id == PlayerGameStats.game_team_id)
-                .join(Game, Game.id == GameTeam.game_id)
-                .where(
-                    GameTeam.team_id == team_id,
-                    Game.season_id == season_id,
-                    Game.observed_at <= as_of,
-                    Game.tip_off_utc < as_of,
-                    PlayerGameStats.observed_at <= as_of,
-                    PlayerGameStats.did_not_play.is_(False),
-                )
-                .distinct()
-            )
-        )
-        .scalars()
-        .all()
-    )
-
-    # Club-correct players who played recently, plus club-correct players who
-    # have not yet appeared for this club this season (new signings, returning
-    # injuries). The model projects low minutes for the uncertain ones, which is
-    # the honest answer; silently omitting a summer signing is not.
-    return sorted((rostered & appeared) | (rostered - debuted))
 
 
 async def predict_game(
@@ -623,10 +478,10 @@ async def predict_upcoming(
     settings: Settings | None = None,
 ) -> dict[str, Any]:
     """Predict every upcoming fixture in the window."""
-    from euroleague_ai.ml.report import DEFAULT_TARGETS
+    from euroleague_ai.ml.report import SERVED_TARGETS
 
     clock = clock or SystemClock()
-    resolved_targets = targets or DEFAULT_TARGETS
+    resolved_targets = targets or SERVED_TARGETS
 
     models = await load_active_models(session, resolved_targets)
     if not models:

@@ -243,9 +243,13 @@ tbody td { padding: 9px 10px; text-align: right; }
 .lead { font-weight: 600; }
 
 /* Probability bar: the actual product, not decoration. */
+td.plays { color: var(--text-dim); }
+tbody tr.doubtful td:not(:first-child):not(.plays) { opacity: 0.45; }
+tbody tr.doubtful td.plays { color: var(--warn); }
+.expected-used { margin: 4px 0 10px; font-size: 0.85rem; }
 .prob { display: flex; align-items: center; gap: 8px; justify-content: flex-end; }
 .prob-track { width: 54px; height: 5px; border-radius: 3px; background: var(--line); overflow: hidden; flex: none; }
-.prob-fill { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent), #ffa273); }
+.prob-fill { display: block; height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent), #ffa273); }
 .prob-value { min-width: 34px; text-align: right; font-size: 0.82rem; }
 
 .conf { display: inline-flex; align-items: center; gap: 6px; justify-content: flex-end; }
@@ -271,6 +275,9 @@ tbody td { padding: 9px 10px; text-align: right; }
   box-shadow: var(--shadow); z-index: 41; display: flex; flex-direction: column;
   animation: slide 0.18s cubic-bezier(0.16, 1, 0.3, 1);
 }
+/* `display: flex` above beats the UA's [hidden] rule, which left an empty drawer
+   covering the page on load. Restore it explicitly. */
+.drawer[hidden], .scrim[hidden] { display: none; }
 @keyframes fade { from { opacity: 0; } }
 @keyframes slide { from { transform: translateX(24px); opacity: 0; } }
 

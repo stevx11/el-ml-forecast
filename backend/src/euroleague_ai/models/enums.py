@@ -111,6 +111,10 @@ class PredictionTarget(StrEnum):
     FREE_THROWS_MADE = "FREE_THROWS_MADE"
     FREE_THROWS_ATTEMPTED = "FREE_THROWS_ATTEMPTED"
     VALUATION = "VALUATION"
+    #: Probability the player takes the floor at all. Not a box-score count:
+    #: ``predicted_value`` is a probability in [0, 1], and every other target is
+    #: a projection *given that he plays*. Added by migration 0005.
+    PLAYS = "PLAYS"
 
 
 class IngestionStatus(StrEnum):

@@ -59,6 +59,13 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
 
     home, away = await _team_labels(session, game)
     rows = await _load(session, game_id=game_id)
+    # Every model shares one cutoff per game, so prediction_timestamp alone
+    # cannot order them. A newer model's rows were written later, so the row's
+    # own created_at breaks the tie.
+    rows.sort(
+        key=lambda row: (row[0].prediction_timestamp, row[0].created_at),
+        reverse=True,
+    )
 
     projections: dict[uuid.UUID, PlayerProjectionOut] = {}
     for prediction, player_name, model_name, model_version in rows:
@@ -73,6 +80,12 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
             ),
         )
         target = str(prediction.target)
+        if target in projection.targets:
+            # Rows arrive newest first. Keep the newest per target; an older
+            # model version's projection must not overwrite the current one.
+            continue
+        if prediction.target is PredictionTarget.PLAYS:
+            projection.play_probability = prediction.predicted_value
         projection.targets[target] = prediction.predicted_value
         projection.models[target] = f"{model_name} {model_version}"
         projection.projections[target] = TargetProjectionOut(

@@ -25,6 +25,10 @@ not be in the squad. The latter two score as zero and are flagged. They are
 excluded from the headline error by default, because a points model should not
 be blamed for a rotation decision, but they are counted and reported -- we did
 publish those projections, and pretending otherwise would flatter the system.
+
+The rotation decision is not left unscored, though. The ``PLAYS`` prediction
+is scored against exactly that outcome: 1 if he took the floor, 0 otherwise,
+with the squared error doubling as its Brier score.
 """
 
 from __future__ import annotations
@@ -129,8 +133,15 @@ async def score_predictions(
         return result
     result.games = len(game_ids)
 
-    for target, column_name in TARGET_COLUMNS.items():
-        column = getattr(PlayerGameStats, column_name)
+    # PLAYS rides along with the stat targets. Its "column" is the box score
+    # row's own id: all that matters is whether a playing line exists.
+    scored_targets: list[tuple[PredictionTarget, Any]] = [
+        (target, getattr(PlayerGameStats, column_name))
+        for target, column_name in TARGET_COLUMNS.items()
+    ]
+    scored_targets.append((PredictionTarget.PLAYS, PlayerGameStats.id))
+
+    for target, column in scored_targets:
 
         # LEFT joins throughout: a prediction for a player who never dressed has
         # no box score row at all, and that case must produce a scored zero
@@ -175,7 +186,13 @@ async def score_predictions(
                 continue
 
             absent = raw_value is None or bool(did_not_play)
-            actual = 0.0 if absent else target_value(target, raw_value)
+            if target is PredictionTarget.PLAYS:
+                # The outcome *is* the appearance. Squared error is then the
+                # Brier score, so the existing columns already hold the right
+                # numbers for a probability.
+                actual = 0.0 if absent else 1.0
+            else:
+                actual = 0.0 if absent else target_value(target, raw_value)
             error = float(predicted) - actual
 
             await session.execute(
@@ -270,7 +287,55 @@ async def accuracy_report(
     report["thresholds"] = await threshold_calibration(
         session, season_code=season_code, include_absent=include_absent
     )
+    report["availability"] = await availability_report(session, season_code=season_code)
     return report
+
+
+async def availability_report(
+    session: AsyncSession, *, season_code: str | None = None
+) -> dict[str, Any]:
+    """How the published P(plays) did: calibration, and players used per team.
+
+    Non-appearances are the whole point here, so there is no ``include_absent``
+    switch. Excluding them would leave only the players who played, and every
+    probability would look too low.
+    """
+    from euroleague_ai.ml.availability import classification_metrics, reliability_table
+    from euroleague_ai.models.features import PlayerFeatureSnapshot
+
+    stmt = (
+        select(
+            Prediction.predicted_value,
+            PredictionOutcome.actual_value,
+            Prediction.game_id,
+            PlayerFeatureSnapshot.team_id,
+        )
+        .join(PredictionOutcome, PredictionOutcome.prediction_id == Prediction.id)
+        .join(
+            PlayerFeatureSnapshot,
+            PlayerFeatureSnapshot.id == Prediction.player_feature_snapshot_id,
+        )
+        .join(Game, Game.id == Prediction.game_id)
+        .where(Prediction.target == PredictionTarget.PLAYS)
+    )
+    if season_code:
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(
+            Season.code == season_code
+        )
+
+    rows = (await session.execute(stmt)).all()
+    if not rows:
+        return {"scored": 0}
+
+    probabilities = [float(row[0]) for row in rows]
+    labels = [float(row[1]) for row in rows]
+    groups = [(row[2], row[3]) for row in rows]
+    metrics = classification_metrics(probabilities, labels, groups).as_dict()
+    return {
+        "scored": len(rows),
+        **{key: value for key, value in metrics.items() if key != "rows"},
+        "reliability": reliability_table(probabilities, labels),
+    }
 
 
 async def interval_coverage(

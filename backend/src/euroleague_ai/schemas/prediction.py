@@ -71,6 +71,9 @@ class PlayerProjectionOut(BaseModel):
     models: dict[str, str]
     #: The richer per-target payload: spread, probabilities, drivers.
     projections: dict[str, TargetProjectionOut] = Field(default_factory=dict)
+    #: P(takes the floor). Every value in ``targets`` is conditional on it.
+    #: Null until a play-probability model is active.
+    play_probability: float | None = None
 
     @property
     def minutes(self) -> float:

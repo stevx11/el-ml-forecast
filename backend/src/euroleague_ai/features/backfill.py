@@ -6,16 +6,26 @@ each running several history queries. That is long enough that the job has to be
 built like the ingestion backfill -- chunked, resumable, and safe to interrupt --
 rather than as a single loop that must run to completion.
 
-**Which rows exist.** A training row is only useful if the outcome is known, so
-snapshots are built for players who actually appeared in a finished game. The
-features are still computed strictly as of the pre-game cutoff; the box score is
-used only to decide *that* a row should exist, never as an input to it.
+**Which rows exist.** Two populations, unioned per game:
 
-That distinction matters and is easy to get wrong. Using the box score to select
-rows introduces a mild survivorship effect -- players who were unavailable have
-no row -- which is correct for training a "given they play, how much do they
-produce" model, and is exactly why minutes and availability are modelled
-separately rather than folded into the same regression.
+1. **Everyone in the box score**, including players who dressed and were never
+   used. These are the rows the stat models train on (DNPs are filtered out at
+   load time, not here).
+2. **Every inference candidate** -- the players
+   :func:`~euroleague_ai.repositories.rosters.candidate_players` would have
+   projected at the cutoff, whether or not they then took the floor.
+
+The second set exists for the play-probability model. Before it, a player who
+was injured had no row at all, so nothing could learn *who does not play*. And
+inference does not predict "the box score". It predicts the candidate list,
+which always includes a few players who will not appear. Training availability
+on anything other than that list would teach it a different question.
+
+The stat datasets are unaffected. They inner-join the box score, so a candidate
+who never dressed has no outcome row and never reaches a regression.
+
+The features are still computed strictly as of the pre-game cutoff. The box
+score only decides *that* a row should exist, never what goes into it.
 """
 
 from __future__ import annotations
@@ -38,6 +48,7 @@ from euroleague_ai.models.competition import Season
 from euroleague_ai.models.enums import GameStatus, TeamSide
 from euroleague_ai.models.features import PlayerFeatureSnapshot
 from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats
+from euroleague_ai.repositories.rosters import candidate_players, current_club
 
 logger = get_logger(__name__)
 
@@ -129,6 +140,58 @@ async def _targets(session: AsyncSession, game: Game) -> list[_PlayerGameTarget]
     ]
 
 
+async def _candidate_targets(
+    session: AsyncSession, game: Game, cutoff: datetime
+) -> list[_PlayerGameTarget]:
+    """Players inference would have projected for ``game`` at ``cutoff``.
+
+    Same function, same cutoff, same arguments as
+    :func:`~euroleague_ai.ml.inference.predict_game`, so the historical
+    candidate list is the one a running system would have produced.
+    """
+    club_by_player = await current_club(session, as_of=cutoff)
+    targets: list[_PlayerGameTarget] = []
+    for team_id, opponent_id, is_home in (
+        (game.home_team_id, game.away_team_id, True),
+        (game.away_team_id, game.home_team_id, False),
+    ):
+        for player_id in await candidate_players(
+            session,
+            team_id=team_id,
+            season_id=game.season_id,
+            as_of=cutoff,
+            club_by_player=club_by_player,
+        ):
+            targets.append(
+                _PlayerGameTarget(
+                    player_id=player_id,
+                    team_id=team_id,
+                    opponent_team_id=opponent_id,
+                    is_home=is_home,
+                )
+            )
+    return targets
+
+
+def merge_targets(
+    box_score: list[_PlayerGameTarget], candidates: list[_PlayerGameTarget]
+) -> list[_PlayerGameTarget]:
+    """Box-score players first, then candidates not already covered.
+
+    The box score wins any disagreement about which side a player was on. It is
+    what actually happened, whereas the candidate side is a roster inference
+    that can be wrong around a transfer. A snapshot is keyed by player and game,
+    so a player can only have one.
+    """
+    seen = {target.player_id for target in box_score}
+    merged = list(box_score)
+    for target in candidates:
+        if target.player_id not in seen:
+            seen.add(target.player_id)
+            merged.append(target)
+    return merged
+
+
 async def _existing_snapshot_players(
     session: AsyncSession, game_id: uuid.UUID, cutoff: datetime
 ) -> set[uuid.UUID]:
@@ -150,13 +213,22 @@ async def backfill_game(
     *,
     clock: Clock,
     settings: Settings,
+    include_candidates: bool = True,
 ) -> BackfillResult:
-    """Build and store snapshots for every player who appeared in ``game``."""
+    """Build and store snapshots for one game's box score and candidate list.
+
+    Args:
+        include_candidates: Also snapshot inference candidates who did not
+            appear. Needed by the play-probability model; turn it off only
+            for a quick stat-model backfill.
+    """
     result = BackfillResult(games_processed=1)
 
     cutoff = default_prediction_timestamp(game.tip_off_utc, settings)
     already = await _existing_snapshot_players(session, game.id, cutoff)
     targets = await _targets(session, game)
+    if include_candidates:
+        targets = merge_targets(targets, await _candidate_targets(session, game, cutoff))
 
     now = clock.now()
     # One cache per game. Team ratings and squad data are identical for every
@@ -251,6 +323,7 @@ async def backfill_snapshots(
     limit: int | None = None,
     clock: Clock | None = None,
     settings: Settings | None = None,
+    include_candidates: bool = True,
 ) -> BackfillResult:
     """Build feature snapshots across finished games.
 
@@ -262,6 +335,8 @@ async def backfill_snapshots(
         season_codes: Restrict to these seasons. ``None`` means all.
         min_round: Skip rounds below this number. See ``DEFAULT_MIN_ROUND``.
         limit: Stop after this many games. Useful for a smoke run.
+        include_candidates: Also snapshot inference candidates who did not
+            play. See the module docstring.
     """
     clock = clock or SystemClock()
     settings = settings or get_settings()
@@ -301,7 +376,13 @@ async def backfill_snapshots(
     pending = 0
 
     for index, game in enumerate(games, start=1):
-        game_result = await backfill_game(session, game, clock=clock, settings=settings)
+        game_result = await backfill_game(
+            session,
+            game,
+            clock=clock,
+            settings=settings,
+            include_candidates=include_candidates,
+        )
         aggregate.merge(game_result)
         pending += game_result.snapshots_written
 

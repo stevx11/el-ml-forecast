@@ -145,8 +145,29 @@ right-skewed and MSE chases the 40-point outliers at the expense of the 90% of p
 that matter for typical use.
 
 Sample restriction: rows where the player was available and the team played. DNPs are
-handled by a separate availability model rather than being folded into the regression as
-zeros.
+handled by a separate availability model (below) rather than being folded into the
+regression as zeros.
+
+### Availability: P(plays)
+
+Every stat model predicts a line *given that the player plays*, but inference projects
+every roster candidate, and that list always includes a few who will not appear.
+`ml/availability.py` predicts the probability that each candidate takes the floor.
+
+- **Population:** exactly the inference candidate list, rebuilt per historical game with
+  `repositories.rosters.candidate_players` at the same cutoff. The snapshot backfill
+  writes rows for these candidates too, so injured players finally have a row.
+- **Label:** 1 if the player has playing time in this team's box score, else 0. "Dressed,
+  never used" and "not in the squad" are both 0, and both are reported separately.
+- **Features:** the v5 snapshot, unchanged. Recent-appearance counts are baseline inputs
+  only. If the model cannot beat them, that is the case for adding them in v6.
+- **Baselines:** league base rate; P(plays | played last game); P(plays | played k of the
+  team's last n games, debut flag), shrunk toward the base rate.
+- **Gate:** lower test log loss than the best baseline. Also reported: Brier, AUC,
+  calibration error, a reliability table, and the error in *expected players used per
+  team-game* (the sum of P(plays) against how many actually got on the floor).
+
+Served as target `PLAYS`, scored after each game like every other target.
 
 **Gate:** beats baseline #5 on walk-forward MAE, on a held-out season, for every target.
 If it does not, the fix is features, not hyperparameters.

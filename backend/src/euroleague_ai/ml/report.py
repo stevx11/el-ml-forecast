@@ -30,6 +30,15 @@ DEFAULT_TARGETS: tuple[PredictionTarget, ...] = (
     PredictionTarget.THREE_POINTERS_MADE,
 )
 
+#: What inference serves: the five stat lines plus the probability that the
+#: player takes the floor at all. Kept separate from ``DEFAULT_TARGETS`` because
+#: ``PLAYS`` is a classifier with its own dataset, and nothing that loops over
+#: box-score targets (baselines, the regression trainer) can handle it.
+SERVED_TARGETS: tuple[PredictionTarget, ...] = (
+    *DEFAULT_TARGETS,
+    PredictionTarget.PLAYS,
+)
+
 
 async def run_baseline_report(
     session: AsyncSession,

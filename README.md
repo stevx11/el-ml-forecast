@@ -26,6 +26,7 @@ Why?  + Increased projected minutes    - Tough opponent defense
 - **Bitemporal data model.** Nothing is overwritten. Every fact carries both when it happened and when the system learned it, so any past prediction can be replayed honestly.
 - **Leakage prevention in four layers**: schema design, mandatory `as_of` arguments, a single SQL choke point, and dedicated adversarial tests.
 - **Baseline-gated models.** A model is registered either way but only activated if it beats a minutes-scaled rate baseline on a chronological holdout. Negative results are kept, not discarded.
+- **Who actually plays.** A separate classifier predicts the chance each roster candidate takes the floor at all. It is trained on exactly the population inference projects, including players who were left out, and gated on log loss against appearance-rate baselines.
 - **Distributions, not just point estimates.** Calibrated intervals and P(X+) thresholds come from empirical held-out residuals, with coverage measured directly.
 - **Explainable projections.** Exact TreeSHAP contributions are grouped into themes (minutes, form, role, opponent, schedule, ...) and phrased as readable reasons.
 - **Closed feedback loop.** Published predictions are scored against real box scores for point accuracy and interval calibration.
@@ -82,9 +83,9 @@ Run these inside the backend container with `docker compose exec backend <comman
 
 ```bash
 euroleague-ai ingest seasons --from 2016 --to 2025 --wait   # backfill history, newest first
-euroleague-ai features backfill --from 2016 --to 2025       # build as_of feature snapshots
+euroleague-ai features backfill --from 2016 --to 2025       # build as_of snapshots (incl. roster candidates)
 euroleague-ai ml baselines                                  # publish the bar to beat
-euroleague-ai ml train                                      # train all five targets
+euroleague-ai ml train                                      # train all five targets, then P(plays)
 euroleague-ai ml predict --days 7                           # project upcoming fixtures
 euroleague-ai ml why --game-code 120 --player petrovic      # explain one projection
 euroleague-ai ml score                                      # score finished games
@@ -209,6 +210,7 @@ Missing data is `None`, never `0.0`. A rookie's ten-game average is *unknown*; s
 | **Strong baseline gate** | The model to beat is a per-minute rate scaled by recent minutes, which is far stronger than a season average. |
 | **Empirical residual distributions** | Intervals come from how wrong the model actually was on held-out data. This needs no extra models and can't produce crossing quantiles. |
 | **Select on validation, report on test** | Hyperparameter search never reports the score it selected on, so selection noise can't be passed off as accuracy. |
+| **Availability is its own model** | Stat models predict a line *if he plays*. P(plays) is a classifier over the full candidate list, because folding absences into the regressions as zeros would teach them that injured stars score nothing. |
 | **Experiments are measured, not assumed** | A structured minutes × rate chain was built and tested; the direct model won on all four targets, so the chain was rejected. |
 
 Every trained model is recorded in a registry with its training data, scores, and artifact path. Together with `prediction_timestamp` and `feature_snapshot_id`, that makes any prediction reproducible months later.
