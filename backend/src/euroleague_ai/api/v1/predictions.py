@@ -90,6 +90,7 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
         projection.models[target] = f"{model_name} {model_version}"
         projection.projections[target] = TargetProjectionOut(
             value=prediction.predicted_value,
+            expected=prediction.expected_value,
             model=f"{model_name} {model_version}",
             quantiles=prediction.quantiles,
             threshold_probabilities=prediction.threshold_probabilities,
@@ -104,6 +105,7 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
         )
 
     await _attach_teams(session, game, projections)
+    team_totals = _expected_lines(projections)
 
     return ProjectionsOut(
         game_id=game_id,
@@ -117,7 +119,39 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
             projections.values(),
             key=lambda p: -(p.targets.get(str(PredictionTarget.MINUTES)) or 0.0),
         ),
+        team_totals=team_totals,
     )
+
+
+def _expected_lines(
+    projections: dict[uuid.UUID, PlayerProjectionOut],
+) -> dict[str, dict[str, float]]:
+    """Fill ``expected_overall`` for every projection and sum squads.
+
+    ``expected_overall`` needs both an expected value and a play probability.
+    The squad total degrades gracefully instead: it uses the best number each
+    player has (expected x P, else expected, else median), so a squad total is
+    always shown and gets more realistic as the pieces arrive.
+    """
+    totals: dict[str, dict[str, float]] = {}
+    for projection in projections.values():
+        plays = projection.play_probability
+        for target, detail in projection.projections.items():
+            if target == str(PredictionTarget.PLAYS):
+                continue
+            if detail.expected is not None and plays is not None:
+                detail.expected_overall = round(detail.expected * plays, 4)
+            best = (
+                detail.expected_overall
+                if detail.expected_overall is not None
+                else detail.expected
+                if detail.expected is not None
+                else detail.value
+            )
+            if projection.team_code:
+                squad = totals.setdefault(projection.team_code, {})
+                squad[target] = round(squad.get(target, 0.0) + best, 2)
+    return totals
 
 
 async def _team_labels(session: SessionDep, game: Game) -> tuple[tuple[str, str], tuple[str, str]]:

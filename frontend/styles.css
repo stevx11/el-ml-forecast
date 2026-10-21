@@ -244,6 +244,11 @@ tbody td { padding: 9px 10px; text-align: right; }
 
 /* Probability bar: the actual product, not decoration. */
 td.plays { color: var(--text-dim); }
+.mode-tabs { margin-top: 0; }
+tfoot tr.total-row { border-top: 1px solid var(--line); background: var(--bg); cursor: default; }
+tfoot tr.total-row td { padding: 9px 10px; text-align: right; font-weight: 600; }
+tfoot tr.total-row td:first-child { text-align: left; padding-left: 14px; }
+.expected-line { margin: -2px 0 10px; font-size: 0.8rem; }
 tbody tr.doubtful td:not(:first-child):not(.plays) { opacity: 0.45; }
 tbody tr.doubtful td.plays { color: var(--warn); }
 .expected-used { margin: 4px 0 10px; font-size: 0.85rem; }

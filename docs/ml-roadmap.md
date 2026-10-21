@@ -169,6 +169,25 @@ every roster candidate, and that list always includes a few who will not appear.
 
 Served as target `PLAYS`, scored after each game like every other target.
 
+### Expected values
+
+The L1 models predict the conditional median. For right-skewed box scores the
+median sits below the mean, and summed medians miss real squad totals badly. Model
+0.1.8's held-out residuals put the gap at roughly 8 points, 4 rebounds, 3 assists and 3
+made threes per team. `ml/expectation.py` adds a mean-targeting head to every target:
+
+- **Candidates:** a second booster (Tweedie, power 1.3, for counts; squared error for
+  minutes), and the median plus its error cell's *mean* residual.
+- **Selection:** lower validation RMSE. **Report:** test.
+- **Gate:** beats the median it replaces on test RMSE *and* on squad-total bias. RMSE
+  against the best baseline is reported as a warning, not a gate.
+- **Serving:** `predictions.expected_value` holds E[X | plays] beside the median.
+  Multiplied by P(plays), it gives the realistic line, and the board sums it into squad
+  totals. Models trained before this change serve the shifted median from their stored
+  distribution.
+- **Monitoring:** `ml accuracy` reports expected-value bias and RMSE, plus squad-total
+  error for medians vs expected values against the real box score.
+
 **Gate:** beats baseline #5 on walk-forward MAE, on a held-out season, for every target.
 If it does not, the fix is features, not hyperparameters.
 

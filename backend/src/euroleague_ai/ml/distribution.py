@@ -212,6 +212,17 @@ class ResidualDistribution:
         residuals = self.residuals_for(predicted, games_played)
         return round(_fraction_at_least(residuals, threshold - predicted), 4)
 
+    def mean_residual(self, predicted: float, games_played: float | None) -> float:
+        """Mean of ``actual - predicted`` in this prediction's error cell.
+
+        Added to the median, it gives the cell's *expected* outcome: the
+        correction from "what he usually does" to "what he averages". Uses
+        the same cell-then-marginal-then-pooled fallback as the quantiles, so a
+        thin cell borrows from a broader one instead of producing a noisy mean.
+        """
+        residuals = self.residuals_for(predicted, games_played)
+        return sum(residuals) / len(residuals) if residuals else 0.0
+
     def spread(self, predicted: float, games_played: float | None) -> float:
         """Robust standard deviation, from the 10-90 range.
 

@@ -27,6 +27,7 @@ Why?  + Increased projected minutes    - Tough opponent defense
 - **Leakage prevention in four layers**: schema design, mandatory `as_of` arguments, a single SQL choke point, and dedicated adversarial tests.
 - **Baseline-gated models.** A model is registered either way but only activated if it beats a minutes-scaled rate baseline on a chronological holdout. Negative results are kept, not discarded.
 - **Who actually plays.** A separate classifier predicts the chance each roster candidate takes the floor at all. It is trained on exactly the population inference projects, including players who were left out, and gated on log loss against appearance-rate baselines.
+- **Expected values that add up.** The L1 models predict medians, and medians of skewed box scores sum to squads that score roughly eight points less than real ones. Each target also gets a mean-targeting head (Tweedie booster or shifted median, chosen on validation), which is published only if it beats the median on test RMSE and on squad-total bias. Weighted by P(plays), it gives realistic team totals.
 - **Distributions, not just point estimates.** Calibrated intervals and P(X+) thresholds come from empirical held-out residuals, with coverage measured directly.
 - **Explainable projections.** Exact TreeSHAP contributions are grouped into themes (minutes, form, role, opponent, schedule, ...) and phrased as readable reasons.
 - **Closed feedback loop.** Published predictions are scored against real box scores for point accuracy and interval calibration.
@@ -210,6 +211,7 @@ Missing data is `None`, never `0.0`. A rookie's ten-game average is *unknown*; s
 | **Strong baseline gate** | The model to beat is a per-minute rate scaled by recent minutes, which is far stronger than a season average. |
 | **Empirical residual distributions** | Intervals come from how wrong the model actually was on held-out data. This needs no extra models and can't produce crossing quantiles. |
 | **Select on validation, report on test** | Hyperparameter search never reports the score it selected on, so selection noise can't be passed off as accuracy. |
+| **Median for the gate, mean for the headline** | MAE rewards the median, so the models are trained for it. A reader adds lines up, which needs the mean. Both are stored: the median for scoring and intervals, the expected value for display and team totals. |
 | **Availability is its own model** | Stat models predict a line *if he plays*. P(plays) is a classifier over the full candidate list, because folding absences into the regressions as zeros would teach them that injured stars score nothing. |
 | **Experiments are measured, not assumed** | A structured minutes × rate chain was built and tested; the direct model won on all four targets, so the chain was rejected. |
 

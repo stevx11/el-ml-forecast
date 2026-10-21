@@ -29,8 +29,21 @@ const state = {
   projections: null,
   squadFilter: "all",
   sort: { key: "MINUTES", dir: "desc" },
+  // "expected" shows what a player averages if he plays; "median" what he
+  // usually does. Expected is the default because medians of skewed stats add
+  // up to squads that score eight points less than real ones.
+  lineMode: "expected",
   status: null,
 };
+
+/** The number shown in a stat cell for the current line mode. */
+function lineValue(player, key) {
+  if (key === "PLAYS") return player.play_probability ?? null;
+  const projection = player.projections?.[key];
+  if (!projection) return player.targets?.[key] ?? null;
+  if (state.lineMode === "expected" && projection.expected != null) return projection.expected;
+  return projection.value;
+}
 
 /* ------------------------------------------------------------------ utils */
 
@@ -302,14 +315,26 @@ function renderGame() {
       .join(" · ")} players</p>`;
   }
 
+  const anyExpected = data.players.some((p) =>
+    Object.values(p.projections || {}).some((proj) => proj.expected != null)
+  );
+  if (anyExpected) {
+    html += `<div class="squad-tabs mode-tabs" role="group" aria-label="Line shown">
+      <button class="squad-tab mode-tab" data-mode="expected" aria-pressed="${state.lineMode === "expected"}"
+        title="What he averages in this spot, if he plays">Expected</button>
+      <button class="squad-tab mode-tab" data-mode="median" aria-pressed="${state.lineMode === "median"}"
+        title="What he usually does, if he plays. Lower than the average for skewed stats.">Median</button>
+    </div>`;
+  }
+
   const players = data.players.filter(
     (p) => state.squadFilter === "all" || p.team_code === state.squadFilter
   );
 
   const { key, dir } = state.sort;
   players.sort((a, b) => {
-    const av = a.targets?.[key] ?? -1;
-    const bv = b.targets?.[key] ?? -1;
+    const av = lineValue(a, key) ?? -1;
+    const bv = lineValue(b, key) ?? -1;
     return dir === "desc" ? bv - av : av - bv;
   });
 
@@ -343,7 +368,7 @@ function renderGame() {
       </div></td>
       <td class="num plays">${plays == null ? "–" : pct(plays)}</td>
       ${TARGETS.map((t) => {
-        const value = player.targets?.[t.key];
+        const value = lineValue(player, t.key);
         const lead = t.key === "MINUTES" || t.key === "POINTS" ? " lead" : "";
         return `<td class="num${lead}">${fmt(value, t.decimals)}</td>`;
       }).join("")}
@@ -356,17 +381,45 @@ function renderGame() {
       </span></td>
     </tr>`;
   }
-  html += `</tbody></table></div>
+  // Squad totals: every player's line weighted by his chance of playing. This is
+  // the number to compare with a real box score.
+  const totals = data.team_totals || {};
+  const squads = Object.keys(totals).filter(
+    (code) => state.squadFilter === "all" || code === state.squadFilter
+  );
+  if (squads.length && state.lineMode === "expected") {
+    html += `</tbody><tfoot>`;
+    for (const code of squads) {
+      html += `<tr class="total-row">
+        <td><div class="player-cell"><span class="team-tag">${esc(code)}</span>
+          <span class="player-name">Squad total</span></div></td>
+        <td class="num plays" title="Expected number of players used">${fmt(expectedUsed[code], 1)}</td>
+        ${TARGETS.map((t) => `<td class="num">${fmt(totals[code]?.[t.key], t.key === "MINUTES" ? 0 : 1)}</td>`).join("")}
+        <td></td><td></td>
+      </tr>`;
+    }
+    html += `</tfoot>`;
+  } else {
+    html += `</tbody>`;
+  }
+
+  html += `</table></div>
     <p class="faint" style="margin-top:10px">
-      Stat columns are projections <em>if he plays</em>; dimmed rows are players more likely to sit out.
+      ${state.lineMode === "expected"
+        ? "Stat columns are what he averages <em>if he plays</em>. Squad totals weight every line by his chance of playing."
+        : "Stat columns are medians <em>if he plays</em>: what he usually does, which runs below his average for skewed stats."}
+      Dimmed rows are players more likely to sit out.
       Select a player for the full distribution, threshold probabilities and the reasons behind the projection.
       Confidence is relative to a typical projection, not an absolute probability.
     </p>`;
 
   panel.innerHTML = html;
 
-  $$(".squad-tab", panel).forEach((el) =>
+  $$(".squad-tab:not(.mode-tab)", panel).forEach((el) =>
     el.addEventListener("click", () => { state.squadFilter = el.dataset.squad; renderGame(); })
+  );
+  $$(".mode-tab", panel).forEach((el) =>
+    el.addEventListener("click", () => { state.lineMode = el.dataset.mode; renderGame(); })
   );
   $$("th.sortable", panel).forEach((el) =>
     el.addEventListener("click", () => {
@@ -426,8 +479,19 @@ function openDrawer(playerId) {
     html += `<div class="target-block">
       <div class="target-head">
         <span class="target-name">${esc(target.label)}</span>
-        <span class="target-value num">${fmt(projection.value, target.decimals)}</span>
+        <span class="target-value num">${fmt(lineValue(player, target.key), target.decimals)}</span>
       </div>`;
+
+    if (projection.expected != null) {
+      // The headline follows the table's Expected/Median toggle; this line
+      // always shows both, plus the line discounted by his chance of sitting out.
+      html += `<p class="muted expected-line">Averages <strong class="num">${
+        fmt(projection.expected, target.decimals)}</strong> if he plays · median <strong class="num">${
+        fmt(projection.value, target.decimals)}</strong>${
+        projection.expected_overall != null
+          ? ` · <span class="num">${fmt(projection.expected_overall, target.decimals)}</span> counting the chance he sits out`
+          : ""}</p>`;
+    }
 
     const q = projection.quantiles;
     if (q) {
@@ -575,10 +639,37 @@ async function loadAccuracy() {
       <div class="card-value num">${fmt(block.mae, 3)}</div>
       <div class="card-note">MAE over ${block.scored.toLocaleString()} scored ·
         bias ${block.bias > 0 ? "+" : ""}${fmt(block.bias, 2)}</div>
+      ${block.expected?.scored ? `<div class="card-note">expected: bias ${
+        block.expected.bias > 0 ? "+" : ""}${fmt(block.expected.bias, 2)} · RMSE ${fmt(block.expected.rmse, 2)}</div>` : ""}
       ${covered != null ? `<div class="card-note">80% interval held ${pct(covered)}</div>` : ""}
     </div>`;
   }
   html += `</div>`;
+
+  const teamTotals = report.team_totals || {};
+  if (Object.keys(teamTotals).length) {
+    html += `<div class="section-title">Do the squads add up?</div>
+      <p class="muted" style="margin:-4px 0 12px">
+        Projected squad totals against the real box score, per team-game. Bias below zero
+        means the projected squad produced less than the real one.
+      </p>
+      <div class="table-wrap" style="margin-bottom:20px"><table>
+        <thead><tr><th>Stat</th><th>Team-games</th><th>Median bias</th><th>Median error</th>
+          <th>Expected bias</th><th>Expected error</th></tr></thead>
+        <tbody>`;
+    for (const [name, kinds] of Object.entries(teamTotals)) {
+      const m = kinds.median || {};
+      const e = kinds.expected || {};
+      const sign = (v) => (v > 0 ? "+" : "") + fmt(v, 1);
+      html += `<tr style="cursor:default">
+        <td>${esc(name.replace(/_/g, " "))}</td>
+        <td class="num">${(m.team_games ?? e.team_games ?? 0).toLocaleString()}</td>
+        <td class="num">${sign(m.bias)}</td><td class="num">±${fmt(m.mae, 1)}</td>
+        <td class="num">${sign(e.bias)}</td><td class="num">±${fmt(e.mae, 1)}</td>
+      </tr>`;
+    }
+    html += `</tbody></table></div>`;
+  }
 
   const availability = report.availability;
   if (availability?.scored) {

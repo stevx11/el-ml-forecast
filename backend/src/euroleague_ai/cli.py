@@ -944,8 +944,9 @@ def cmd_ml_tune(
 
                 # The honest confirmation: retrain both on the same split and
                 # compare on test, which the search never touched.
-                tuned = train_target(rows, item, params=found.best.params)
-                default = train_target(rows, item)
+                # MAE comparison only; the expectation head would double the cost.
+                tuned = train_target(rows, item, params=found.best.params, fit_expected=False)
+                default = train_target(rows, item, fit_expected=False)
                 record = found.as_dict()
                 record["test_mae_tuned"] = round(tuned.metrics.mae, 4)
                 record["test_mae_default"] = round(default.metrics.mae, 4)
@@ -1111,6 +1112,33 @@ def cmd_ml_chain(
             "  Direct wins everywhere. Error compounding beat the stability gain;\n"
             "  the honest move is to leave the models as they are.",
             fg=typer.colors.YELLOW, bold=True,
+        )
+
+
+def _print_expectation(expectation: dict[str, Any] | None) -> None:
+    """Render how a target's expected value was chosen and whether it adds up."""
+    if not expectation:
+        return
+    chosen = expectation["chosen"]
+    test = expectation["test"]
+    totals = expectation["team_totals"]
+    published = expectation["source"] != "none"
+    typer.echo(
+        f"    expected     {chosen.replace('_', ' ')}: RMSE {test[chosen]['rmse']:.3f} "
+        f"vs median {test['median']['rmse']:.3f}, bias {test[chosen]['bias']:+.3f} "
+        f"vs {test['median']['bias']:+.3f}"
+    )
+    typer.secho(
+        f"    squad totals bias per team-game: median {totals['median']['bias']:+.2f}"
+        f" -> expected {totals[chosen]['bias']:+.2f}   "
+        f"{'published' if published else 'FAIL - no expected values published'}",
+        fg=typer.colors.GREEN if published else typer.colors.RED,
+    )
+    if not expectation.get("beats_baseline", True):
+        typer.secho(
+            f"      note: RMSE does not beat the best baseline "
+            f"({expectation['baseline']} {expectation['baseline_rmse']:.3f})",
+            fg=typer.colors.YELLOW,
         )
 
 
@@ -1307,6 +1335,8 @@ def cmd_ml_train(
                     fg=typer.colors.YELLOW,
                 )
 
+        _print_expectation(s.get("expectation"))
+
         typer.echo(f"    top features: " + ", ".join(n for n, _ in block["top_features"][:5]))
         typer.echo(f"    artifact:     {block['model']['artifact']}")
 
@@ -1416,8 +1446,20 @@ def cmd_ml_predict(
 def cmd_ml_show(
     game_code: Annotated[int, typer.Option("--game-code", "-g")],
     season: SeasonOption = "",
+    median: Annotated[
+        bool,
+        typer.Option(
+            "--median",
+            help="Show medians (what he usually does) instead of expected values "
+            "(what he averages).",
+        ),
+    ] = False,
 ) -> None:
-    """Print the projected lines for one game."""
+    """Print the projected lines for one game.
+
+    Stat columns are expected values given he plays, where the model publishes
+    them, otherwise medians. ``play`` is the chance he takes the floor.
+    """
     from sqlalchemy import select
 
     from euroleague_ai.models.competition import Season
@@ -1459,6 +1501,7 @@ def cmd_ml_show(
                         Prediction.quantiles,
                         Prediction.threshold_probabilities,
                         Prediction.confidence,
+                        Prediction.expected_value,
                     )
                     .join(Player, Player.id == Prediction.player_id)
                     .join(ModelVersion, ModelVersion.id == Prediction.model_version_id)
@@ -1470,9 +1513,11 @@ def cmd_ml_show(
             ).all()
 
             by_player: dict[str, dict[str, Any]] = {}
-            for full_name, target, value, quantiles, thresholds, confidence in rows:
+            for full_name, target, value, quantiles, thresholds, confidence, expected in rows:
                 entry = by_player.setdefault(full_name, {})
                 entry[str(target)] = float(value)
+                if expected is not None:
+                    entry[f"{str(target)}_e"] = float(expected)
                 # str() explicitly: PredictionTarget is a StrEnum today, but
                 # relying on f-string formatting of an enum is the kind of thing
                 # that silently changes key names if the base class ever does.
@@ -1494,6 +1539,11 @@ def cmd_ml_show(
     order = ["MINUTES", "POINTS", "REBOUNDS", "ASSISTS", "THREE_POINTERS_MADE"]
     typer.echo("")
     typer.secho(f"  tip-off {data['tip_off']}", bold=True)  # type: ignore[index]
+    use_expected = not median and any(f"{t}_e" in v for v in players.values() for t in order)
+    typer.echo(
+        "  stat columns: "
+        + ("expected if he plays (--median for medians)" if use_expected else "medians if he plays")
+    )
     typer.echo(
         f"  {'player':<28}{'play':>6}{'MIN':>7}{'PTS':>7}{'REB':>7}{'AST':>7}{'3PM':>7}"
         f"{'conf':>7}   pts 10/15/20/25"
@@ -1501,7 +1551,12 @@ def cmd_ml_show(
     for name, values in sorted(
         players.items(), key=lambda kv: -kv[1].get("MINUTES", 0.0)
     ):
-        cells = "".join(f"{values.get(t, float('nan')):>7.1f}" for t in order)
+        def cell(target: str, values: dict[str, Any] = values) -> float:
+            if use_expected and f"{target}_e" in values:
+                return float(values[f"{target}_e"])
+            return float(values.get(target, float("nan")))
+
+        cells = "".join(f"{cell(t):>7.1f}" for t in order)
         # P(plays) first: every number to its right is conditional on it.
         plays = values.get("PLAYS")
         play_cell = "     -" if plays is None else f"{plays:>6.0%}"

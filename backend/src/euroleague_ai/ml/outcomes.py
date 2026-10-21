@@ -276,6 +276,9 @@ async def accuracy_report(
             # Signed, and reported rather than corrected. Correcting it is what
             # broke the models the last time.
             "bias": round(float(bias), 4),
+            "expected": await _expected_accuracy(
+                session, target=target, season_code=season_code, include_absent=include_absent
+            ),
             "interval": await interval_coverage(
                 session,
                 target=target,
@@ -288,6 +291,166 @@ async def accuracy_report(
         session, season_code=season_code, include_absent=include_absent
     )
     report["availability"] = await availability_report(session, season_code=season_code)
+    report["team_totals"] = await team_totals_report(session, season_code=season_code)
+    return report
+
+
+async def _expected_accuracy(
+    session: AsyncSession,
+    *,
+    target: PredictionTarget,
+    season_code: str | None,
+    include_absent: bool,
+) -> dict[str, Any]:
+    """RMSE and bias of the published expected values, where there are any.
+
+    Judged on RMSE because the mean is what minimises squared error. Its bias
+    should sit near zero, where the median's sits clearly below it.
+    """
+    stmt = (
+        select(
+            func.count(PredictionOutcome.id),
+            func.avg(
+                (Prediction.expected_value - PredictionOutcome.actual_value)
+                * (Prediction.expected_value - PredictionOutcome.actual_value)
+            ),
+            func.avg(Prediction.expected_value - PredictionOutcome.actual_value),
+        )
+        .join(Prediction, Prediction.id == PredictionOutcome.prediction_id)
+        .join(Game, Game.id == Prediction.game_id)
+        .where(Prediction.target == target, Prediction.expected_value.isnot(None))
+    )
+    if season_code:
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
+    if not include_absent:
+        stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
+    count, mse, bias = (await session.execute(stmt)).one()
+    if not count:
+        return {"scored": 0}
+    return {
+        "scored": int(count),
+        "rmse": round(float(mse) ** 0.5, 4),
+        "bias": round(float(bias), 4),
+    }
+
+
+#: Targets whose squad totals mean something. Minutes are included on purpose:
+#: a squad's projected minutes should add up to roughly 200.
+TEAM_TOTAL_TARGETS: tuple[PredictionTarget, ...] = (
+    PredictionTarget.MINUTES,
+    PredictionTarget.POINTS,
+    PredictionTarget.REBOUNDS,
+    PredictionTarget.ASSISTS,
+    PredictionTarget.THREE_POINTERS_MADE,
+)
+
+
+def summarise_team_totals(
+    projected: dict[str, dict[tuple[Any, Any], float]],
+    actual: dict[tuple[Any, Any], float],
+) -> dict[str, dict[str, float]]:
+    """MAE and bias of summed squad totals, one entry per projection kind.
+
+    Pure, so the arithmetic is unit-tested separately from the queries.
+    """
+    out: dict[str, dict[str, float]] = {}
+    for kind, sums in projected.items():
+        errors = [sums[key] - actual.get(key, 0.0) for key in sums]
+        if not errors:
+            continue
+        out[kind] = {
+            "team_games": len(errors),
+            "mae": round(sum(abs(e) for e in errors) / len(errors), 3),
+            "bias": round(sum(errors) / len(errors), 3),
+        }
+    return out
+
+
+async def team_totals_report(
+    session: AsyncSession, *, season_code: str | None = None
+) -> dict[str, Any]:
+    """Do the projected squads add up to the real ones?
+
+    For every scored team-game, three sums are compared with the squad's real
+    total from the box score, *including* players we never projected:
+
+    * ``median``: the published medians, summed over every projected player.
+      What the board showed before expected values existed.
+    * ``expected``: P(plays) x expected value given he plays, the realistic
+      line. Falls back to the expected value alone when there is no
+      play-probability, and to the median when there is no expected value.
+
+    Only the newest prediction per player, game and target is used. Summing
+    across model versions would count a player twice.
+    """
+    from euroleague_ai.models.features import PlayerFeatureSnapshot
+
+    targets = (*TEAM_TOTAL_TARGETS, PredictionTarget.PLAYS)
+    stmt = (
+        select(
+            Prediction.game_id,
+            PlayerFeatureSnapshot.team_id,
+            Prediction.player_id,
+            Prediction.target,
+            Prediction.predicted_value,
+            Prediction.expected_value,
+            Prediction.created_at,
+        )
+        .join(PredictionOutcome, PredictionOutcome.prediction_id == Prediction.id)
+        .join(
+            PlayerFeatureSnapshot,
+            PlayerFeatureSnapshot.id == Prediction.player_feature_snapshot_id,
+        )
+        .join(Game, Game.id == Prediction.game_id)
+        .where(Prediction.target.in_(targets))
+    )
+    if season_code:
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
+
+    latest: dict[tuple[Any, Any, Any], tuple[Any, float, float | None, Any]] = {}
+    for game_id, team_id, player_id, target, median, expected, created in (
+        await session.execute(stmt)
+    ).all():
+        prediction_key = (game_id, player_id, target)
+        if prediction_key not in latest or created > latest[prediction_key][3]:
+            latest[prediction_key] = (team_id, float(median), expected, created)
+    if not latest:
+        return {}
+
+    plays = {
+        (game_id, player_id): median
+        for (game_id, player_id, target), (_t, median, _e, _c) in latest.items()
+        if target is PredictionTarget.PLAYS
+    }
+    game_ids = {game_id for game_id, _p, _t in latest}
+
+    report: dict[str, Any] = {}
+    for target in TEAM_TOTAL_TARGETS:
+        column = getattr(PlayerGameStats, TARGET_COLUMNS[target])
+        actual: dict[tuple[Any, Any], float] = {}
+        for game_id, team_id, total in (
+            await session.execute(
+                select(GameTeam.game_id, GameTeam.team_id, func.sum(column))
+                .join(PlayerGameStats, PlayerGameStats.game_team_id == GameTeam.id)
+                .where(GameTeam.game_id.in_(game_ids))
+                .group_by(GameTeam.game_id, GameTeam.team_id)
+            )
+        ).all():
+            actual[(game_id, team_id)] = target_value(target, int(total or 0))
+
+        projected: dict[str, dict[tuple[Any, Any], float]] = {"median": {}, "expected": {}}
+        for (game_id, player_id, item), (team_id, median, expected, _c) in latest.items():
+            if item is not target:
+                continue
+            key = (game_id, team_id)
+            mean = float(expected) if expected is not None else median
+            weight = plays.get((game_id, player_id), 1.0)
+            projected["median"][key] = projected["median"].get(key, 0.0) + median
+            projected["expected"][key] = projected["expected"].get(key, 0.0) + weight * mean
+
+        summary = summarise_team_totals(projected, actual)
+        if summary:
+            report[str(target)] = summary
     return report
 
 

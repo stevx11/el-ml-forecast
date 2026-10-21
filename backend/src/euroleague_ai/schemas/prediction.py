@@ -41,8 +41,15 @@ class TargetProjectionOut(BaseModel):
     estimate on its own invites more confidence than it has earned.
     """
 
+    #: The median. What the model is trained for and what MAE judges.
     value: float
     model: str
+    #: Mean outcome *given he plays*. Null when this target's expectation failed
+    #: its gate, or for predictions written before expected values existed.
+    expected: float | None = None
+    #: ``expected`` x P(plays): the realistic line, and the one that adds up to a
+    #: team total. Null without both pieces.
+    expected_overall: float | None = None
     #: Predicted quantiles, e.g. ``{"0.1": 8.0, "0.5": 14.0, "0.9": 21.0}``.
     quantiles: dict[str, float] | None = None
     #: ``{"15": 0.42}`` -- P(actual >= 15).
@@ -90,3 +97,8 @@ class ProjectionsOut(BaseModel):
     home_team_code: str | None = None
     away_team_code: str | None = None
     players: list[PlayerProjectionOut]
+    #: Per squad, per target: the sum of ``expected_overall`` (falling back to
+    #: ``expected``, then to the median). The quickest check that a projection
+    #: is realistic: does Partizan add up to a believable 82 points and 200
+    #: minutes?
+    team_totals: dict[str, dict[str, float]] = Field(default_factory=dict)

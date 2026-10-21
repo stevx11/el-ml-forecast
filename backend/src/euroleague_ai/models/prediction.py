@@ -110,6 +110,17 @@ class Prediction(Base, UUIDPrimaryKeyMixin, TimestampMixin):
 
     target: Mapped[PredictionTarget] = mapped_column(nullable=False)
     predicted_value: Mapped[float] = mapped_column(Float, nullable=False)
+    expected_value: Mapped[float | None] = mapped_column(
+        Float,
+        nullable=True,
+        comment="Mean outcome given the player plays. predicted_value is the median.",
+        doc=(
+            "The mean of this prediction, conditional on playing. "
+            "``predicted_value`` stays the median: scoring, intervals and "
+            "threshold probabilities are built around it. Multiply by the "
+            "player's PLAYS probability for an unconditional expectation."
+        ),
+    )
     predicted_std: Mapped[float | None] = mapped_column(Float, nullable=True)
 
     quantiles: Mapped[dict[str, Any] | None] = mapped_column(

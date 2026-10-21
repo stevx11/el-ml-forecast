@@ -37,8 +37,14 @@ from euroleague_ai.core.errors import NotFoundError
 from euroleague_ai.core.logging import get_logger
 from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features
 from euroleague_ai.ml.distribution import ResidualDistribution, thresholds_for
+from euroleague_ai.ml.expectation import (
+    SOURCE_BOOSTER,
+    SOURCE_NONE,
+    SOURCE_SHIFTED_MEDIAN,
+    shifted_median,
+)
 from euroleague_ai.ml.explain import PLAYS_MIN_IMPACT, PLAYS_PHRASES, explain_prediction
-from euroleague_ai.ml.registry import distribution_path
+from euroleague_ai.ml.registry import distribution_path, expectation_paths
 from euroleague_ai.features.snapshot import default_prediction_timestamp
 from euroleague_ai.models.enums import GameStatus, PredictionTarget
 from euroleague_ai.models.features import PlayerFeatureSnapshot
@@ -64,6 +70,11 @@ class LoadedModel:
     #: in which case predictions carry a point estimate only rather than a
     #: fabricated interval.
     distribution: ResidualDistribution | None = None
+    #: Where the expected value comes from: ``booster``, ``shifted_median`` or
+    #: ``none``. See :mod:`euroleague_ai.ml.expectation`.
+    expected_source: str = SOURCE_NONE
+    #: The mean-targeting booster, when ``expected_source == "booster"``.
+    expected_booster: Any = None
 
     def predict_batch(self, feature_dicts: list[dict[str, Any]]) -> list[float]:
         """Predict a whole squad at once, calibrated and clipped.
@@ -83,6 +94,31 @@ class LoadedModel:
             # A probability is never shifted, only kept inside [0, 1].
             return [min(1.0, max(0.0, float(value))) for value in raw]
         return [max(0.0, float(value) + self.calibration_offset) for value in raw]
+
+    def expected_batch(
+        self, feature_dicts: list[dict[str, Any]], medians: list[float]
+    ) -> list[float | None]:
+        """Expected value given he plays, per row, or ``None`` where there is none.
+
+        ``medians`` are this model's own served predictions for the same rows,
+        needed by the shifted-median source.
+        """
+        missing: list[float | None] = [None] * len(feature_dicts)
+        if not feature_dicts or self.is_probability:
+            return missing
+        if self.expected_source == SOURCE_BOOSTER and self.expected_booster is not None:
+            x = features_to_matrix(feature_dicts, self.feature_names)
+            return [max(0.0, float(v)) for v in self.expected_booster.predict(x)]
+        if self.expected_source == SOURCE_SHIFTED_MEDIAN and self.distribution is not None:
+            return list(
+                shifted_median(
+                    medians,
+                    None,
+                    self.distribution,
+                    histories=[f.get("games_played_career_window") for f in feature_dicts],
+                )
+            )
+        return missing
 
     @property
     def is_probability(self) -> bool:
@@ -199,6 +235,28 @@ def load_model(model_version: ModelVersion) -> LoadedModel:
             json.loads(dist_path.read_text(encoding="utf-8"))
         )
 
+    # Expected values. A model trained with the expectation head records its
+    # gated choice; one trained before it has no record, and gets the shifted
+    # median, which needs nothing but the distribution it already carries.
+    expected_source = SOURCE_NONE
+    expected_booster = None
+    booster_path, report_path = expectation_paths(model_path)
+    if report_path.is_file():
+        expected_source = str(
+            json.loads(report_path.read_text(encoding="utf-8")).get("source", SOURCE_NONE)
+        )
+        if expected_source == SOURCE_BOOSTER:
+            if booster_path.is_file():
+                expected_booster = lgb.Booster(model_file=str(booster_path))
+            else:
+                logger.warning(
+                    "expectation booster missing; no expected values",
+                    extra={"artifact": str(booster_path)},
+                )
+                expected_source = SOURCE_NONE
+    elif residuals is not None and model_version.target is not PredictionTarget.PLAYS:
+        expected_source = SOURCE_SHIFTED_MEDIAN
+
     return LoadedModel(
         model_version=model_version,
         booster=lgb.Booster(model_file=str(model_path)),
@@ -206,6 +264,8 @@ def load_model(model_version: ModelVersion) -> LoadedModel:
         calibration_offset=float(metrics.get("calibration_offset", 0.0)),
         target=model_version.target,
         distribution=residuals,
+        expected_source=expected_source,
+        expected_booster=expected_booster,
     )
 
 
@@ -339,9 +399,10 @@ async def predict_game(
 
     for target, model in models.items():
         values = model.predict_batch(feature_dicts)
+        expected_values = model.expected_batch(feature_dicts, values)
         explanations = model.explain_batch(feature_dicts)
-        for (player_id, snapshot_id, features), value, explanation in zip(
-            rows, values, explanations, strict=True
+        for (player_id, snapshot_id, features), value, expected, explanation in zip(
+            rows, values, expected_values, explanations, strict=True
         ):
             spread = model.distribution_for(value, features)
             await session.execute(
@@ -354,6 +415,7 @@ async def predict_game(
                     game_id=game.id,
                     target=target,
                     predicted_value=value,
+                    expected_value=expected,
                     predicted_std=spread.get("predicted_std"),
                     quantiles=spread.get("quantiles"),
                     threshold_probabilities=spread.get("threshold_probabilities"),
@@ -371,6 +433,7 @@ async def predict_game(
                     ],
                     set_={
                         "predicted_value": value,
+                        "expected_value": expected,
                         "predicted_std": spread.get("predicted_std"),
                         "quantiles": spread.get("quantiles"),
                         "threshold_probabilities": spread.get(

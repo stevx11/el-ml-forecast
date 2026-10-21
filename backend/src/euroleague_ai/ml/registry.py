@@ -49,6 +49,17 @@ def distribution_path(model_path: Path) -> Path:
     return model_path.parent / "distribution.json"
 
 
+def expectation_paths(model_path: Path) -> tuple[Path, Path]:
+    """``(expected_model.txt, expectation.json)`` beside a booster.
+
+    The JSON says where the expected value comes from (``booster``,
+    ``shifted_median`` or ``none``). The second booster exists only when it won.
+    A model directory with neither predates expected values, and inference falls
+    back to the shifted median, which needs only the distribution.
+    """
+    return model_path.parent / "expected_model.txt", model_path.parent / "expectation.json"
+
+
 def save_artifact(
     result: TrainingResult, *, name: str, version: str, root: Path | None = None
 ) -> Path:
@@ -77,6 +88,14 @@ def save_artifact(
     distribution_path(model_path).write_text(
         json.dumps(result.distribution.to_dict()), encoding="utf-8"
     )
+    if result.expectation is not None:
+        booster_path, report_path = expectation_paths(model_path)
+        report = result.expectation.summary()
+        if result.expected_booster is not None:
+            result.expected_booster.save_model(
+                str(booster_path), num_iteration=result.expectation.booster_best_iteration
+            )
+        report_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
     return model_path
 
 

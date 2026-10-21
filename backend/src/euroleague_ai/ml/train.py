@@ -39,6 +39,7 @@ from euroleague_ai.ml.distribution import (
     fit_residual_distribution,
 )
 from euroleague_ai.ml.evaluation import Metrics, compute_metrics, stratified_metrics
+from euroleague_ai.ml.expectation import ExpectationReport, fit_expectation
 from euroleague_ai.ml.matrix import derive_feature_names, matrix_summary, to_matrix
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -137,6 +138,11 @@ class TrainingResult:
     training_data_hash: str
     booster: Any = None
     seasons: list[str] = field(default_factory=list)
+    #: How the expected value is produced, and how well. ``None`` when training
+    #: was asked to skip it (the tuner does, to halve its cost).
+    expectation: ExpectationReport | None = None
+    #: The expectation booster, when it won on validation and passed its gate.
+    expected_booster: Any = None
 
     @property
     def improvement(self) -> float:
@@ -176,6 +182,7 @@ class TrainingResult:
                 "validation": self.validation_rows,
                 "test": self.test_rows,
             },
+            "expectation": self.expectation.summary() if self.expectation else None,
         }
 
 
@@ -315,8 +322,12 @@ def train_target(
     params: dict[str, Any] | None = None,
     num_rounds: int = DEFAULT_NUM_ROUNDS,
     early_stopping: int = DEFAULT_EARLY_STOPPING,
+    fit_expected: bool = True,
 ) -> TrainingResult:
     """Train one LightGBM model and judge it against the best baseline.
+
+    With ``fit_expected`` (the default) a second, mean-targeting head is fitted
+    and gated too. See :mod:`euroleague_ai.ml.expectation`.
 
     Raises:
         ValueError: if there are too few rows to form a chronological split.
@@ -402,6 +413,27 @@ def train_target(
 
     baseline_name, baseline_metrics = _best_baseline(test_rows, target)
 
+    expectation = None
+    expected_booster = None
+    if fit_expected:
+        fitted = fit_expectation(
+            target=target,
+            base_params=resolved_params,
+            feature_names=feature_names,
+            x_train=x_train,
+            y_train=y_train,
+            x_validation=x_validation,
+            x_test=x_test,
+            validation_rows=validation_rows,
+            test_rows=test_rows,
+            validation_medians=calibrated_validation,
+            test_medians=predictions,
+            distribution=distribution,
+            num_rounds=num_rounds,
+            early_stopping=early_stopping,
+        )
+        expectation, expected_booster = fitted.report, fitted.booster
+
     importance = sorted(
         zip(
             feature_names,
@@ -432,6 +464,8 @@ def train_target(
         training_data_hash=_hash_rows(train_rows),
         booster=booster,
         seasons=sorted({row.season_code for row in rows}),
+        expectation=expectation,
+        expected_booster=expected_booster,
     )
 
     logger.info("trained", extra=result.summary())
