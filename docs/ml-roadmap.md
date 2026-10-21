@@ -188,6 +188,25 @@ made threes per team. `ml/expectation.py` adds a mean-targeting head to every ta
 - **Monitoring:** `ml accuracy` reports expected-value bias and RMSE, plus squad-total
   error for medians vs expected values against the real box score.
 
+### Squad minutes reconciliation
+
+Minutes are predicted player by player, so nothing makes a squad add up to the
+minutes a real team plays. `ml/reconcile.py` scales each side of a fixture by one
+factor so the squad's P(plays)-weighted minutes move toward the measured average for
+real squads (just over 200, because of overtime):
+`s = (T / sum P(plays) x minutes) ** alpha`, capped at 40 minutes per player, with any
+capped excess spread over the rest of the side.
+
+- **Fit:** `euroleague-ai ml reconcile`. It scores the active MINUTES and PLAYS models
+  on periods neither has seen, picks the strongest `alpha` from 0 to 1 whose validation
+  player-minutes MAE is no worse than unscaled, and reports the result on test.
+- **Gate:** on only if test squad error is smaller and player MAE is not significantly
+  worse: a paired scaled-vs-unscaled comparison, with the standard error clustered by
+  squad, failing above two standard errors.
+- **Serving:** applied to the minutes expected value only (median, intervals and
+  thresholds untouched), and only for the model versions it was fitted on. Rerun it
+  after every `ml train`.
+
 **Gate:** beats baseline #5 on walk-forward MAE, on a held-out season, for every target.
 If it does not, the fix is features, not hyperparameters.
 

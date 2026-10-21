@@ -52,6 +52,7 @@ from euroleague_ai.models.game import Game
 from euroleague_ai.models.prediction import ModelVersion, Prediction
 from euroleague_ai.ml.matrix import features_to_matrix
 from euroleague_ai.ml.registry import active_model
+from euroleague_ai.ml.reconcile import MinutesReconciliation, load_reconciliation
 from euroleague_ai.repositories.rosters import candidate_players, current_club
 
 logger = get_logger(__name__)
@@ -323,8 +324,15 @@ async def predict_game(
     *,
     clock: Clock | None = None,
     settings: Settings | None = None,
+    reconciliation: MinutesReconciliation | None = None,
 ) -> int:
     """Build snapshots and predictions for one upcoming game.
+
+    Args:
+        reconciliation: A gated minutes fit from ``ml reconcile``. When it was
+            fitted for exactly these MINUTES and PLAYS model versions, each
+            side's expected minutes are scaled so the squad adds up. See
+            :mod:`euroleague_ai.ml.reconcile`.
 
     Returns the number of prediction rows written.
     """
@@ -397,10 +405,49 @@ async def predict_game(
     feature_dicts = [features for _, _, features in rows]
     written = 0
 
+    # Every target first, then the cross-target adjustment, then the writes.
+    # Reconciling minutes needs P(plays) for the same players, so nothing can be
+    # written until both are known.
+    computed: dict[PredictionTarget, tuple[list[float], list[float | None], list[Any]]] = {}
     for target, model in models.items():
         values = model.predict_batch(feature_dicts)
-        expected_values = model.expected_batch(feature_dicts, values)
-        explanations = model.explain_batch(feature_dicts)
+        computed[target] = (
+            values,
+            model.expected_batch(feature_dicts, values),
+            model.explain_batch(feature_dicts),
+        )
+
+    if (
+        reconciliation is not None
+        and PredictionTarget.MINUTES in computed
+        and PredictionTarget.PLAYS in computed
+    ):
+        if reconciliation.applies_to(models):
+            medians, expected_minutes, minute_explanations = computed[PredictionTarget.MINUTES]
+            base = [
+                e if e is not None else m
+                for e, m in zip(expected_minutes, medians, strict=True)
+            ]
+            reconciled = reconciliation.apply(
+                base,
+                computed[PredictionTarget.PLAYS][0],
+                # One factor per side of the fixture.
+                [features.get("is_home") for features in feature_dicts],
+            )
+            computed[PredictionTarget.MINUTES] = (
+                medians,
+                [round(v, 4) for v in reconciled],
+                minute_explanations,
+            )
+        else:
+            logger.warning(
+                "minutes reconciliation was fitted for other model versions; "
+                "skipping it. Run `euroleague-ai ml reconcile` after training.",
+                extra={"game_code": game.game_code},
+            )
+
+    for target, model in models.items():
+        values, expected_values, explanations = computed[target]
         for (player_id, snapshot_id, features), value, expected, explanation in zip(
             rows, values, expected_values, explanations, strict=True
         ):
@@ -566,10 +613,19 @@ async def predict_upcoming(
         extra={"games": len(games), "targets": [str(t) for t in models]},
     )
 
+    reconciliation = load_reconciliation()
+    if reconciliation is not None and not reconciliation.applies_to(models):
+        logger.warning(
+            "minutes reconciliation is stale for the active models; run "
+            "`euroleague-ai ml reconcile`"
+        )
+        reconciliation = None
+
     total = 0
     for index, game in enumerate(games, start=1):
         total += await predict_game(
-            session, game, models, clock=clock, settings=settings
+            session, game, models, clock=clock, settings=settings,
+            reconciliation=reconciliation,
         )
         await session.commit()
         logger.info(
@@ -585,4 +641,9 @@ async def predict_upcoming(
             str(t): f"{m.model_version.name} {m.model_version.version}"
             for t, m in models.items()
         },
+        "minutes_reconciliation": (
+            f"alpha {reconciliation.alpha}, squads to {reconciliation.target_minutes:.1f} min"
+            if reconciliation is not None
+            else "off"
+        ),
     }

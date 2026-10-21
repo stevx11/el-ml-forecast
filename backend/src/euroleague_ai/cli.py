@@ -1340,12 +1340,105 @@ def cmd_ml_train(
         typer.echo(f"    top features: " + ", ".join(n for n, _ in block["top_features"][:5]))
         typer.echo(f"    artifact:     {block['model']['artifact']}")
 
+    if any(name in report["targets"] for name in ("MINUTES", "PLAYS")):
+        typer.echo("")
+        typer.secho(
+            "Minutes or P(plays) changed: run `euroleague-ai ml reconcile` so squad "
+            "minutes are scaled for the new versions.",
+            fg=typer.colors.YELLOW,
+        )
     typer.echo("")
     typer.secho(
         f"{passed} target(s) passed the gate, {failed} failed.",
         fg=typer.colors.GREEN if failed == 0 else typer.colors.YELLOW,
         bold=True,
     )
+
+
+@ml_app.command("reconcile")
+def cmd_ml_reconcile(
+    save: Annotated[
+        bool,
+        typer.Option("--save/--dry-run", help="Write the fit so predictions use it."),
+    ] = True,
+) -> None:
+    """Fit how hard to scale squad minutes toward what real squads play.
+
+    Uses the active MINUTES and P(plays) models on games neither has seen.
+    The strength is the strongest whose validation player minutes are no worse
+    than unscaled, and is judged on the test period: it switches on only if
+    squad totals get better there and player minutes are not significantly
+    worse (paired, clustered by squad). Run it again after every `ml train`.
+    """
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.ml.inference import load_active_models
+    from euroleague_ai.ml.reconcile import fit_minutes_reconciliation, reconciliation_path
+    from euroleague_ai.models.enums import PredictionTarget
+
+    async def job() -> object:
+        async with session_scope() as session:
+            models = await load_active_models(
+                session, (PredictionTarget.MINUTES, PredictionTarget.PLAYS)
+            )
+            fit = await fit_minutes_reconciliation(
+                session, models=models, save=save, now=SystemClock().now()
+            )
+            return fit.to_dict()
+
+    try:
+        report = _run(job)
+    except ValueError as exc:
+        typer.secho(f"  {exc}", fg=typer.colors.RED, bold=True)
+        raise typer.Exit(code=1) from exc
+
+    r: dict[str, Any] = report  # type: ignore[assignment]
+    typer.echo("")
+    typer.secho(
+        f"Squad minutes reconciliation - {r['minutes_model']} + {r['plays_model']}", bold=True
+    )
+    typer.echo(
+        f"  target: squads' candidates log {r['target_minutes']:.1f} min per team-game "
+        f"(validation from {r['periods']['fit_start'][:10]}, test from "
+        f"{r['periods']['test_start'][:10]})"
+    )
+    typer.echo("")
+    typer.echo(f"  {'alpha':>5}  {'player MAE':>10}  {'player bias':>11}  {'squad error':>11}  {'squad bias':>10}")
+    for row in r["validation"]:
+        marker = "  <- chosen" if row["alpha"] == r["alpha"] else ""
+        typer.echo(
+            f"  {row['alpha']:>5.1f}  {row['player_mae']:>10.3f}  {row['player_bias']:>+11.3f}  "
+            f"{row['squad_mae']:>11.2f}  {row['squad_bias']:>+10.2f}{marker}"
+        )
+    base, scaled = r["test"]["unscaled"], r["test"]["scaled"]
+    typer.echo("")
+    typer.echo("  test period (unseen by both models):")
+    typer.echo(
+        f"    unscaled      player MAE {base['player_mae']:.3f}   squad error {base['squad_mae']:.2f} "
+        f"(bias {base['squad_bias']:+.2f})"
+    )
+    typer.echo(
+        f"    alpha {r['alpha']:.1f}     player MAE {scaled['player_mae']:.3f}   squad error "
+        f"{scaled['squad_mae']:.2f} (bias {scaled['squad_bias']:+.2f})"
+    )
+    delta = r["test"].get("player_delta") or {}
+    if delta.get("se") is not None:
+        worse = r["test"].get("players_significantly_worse")
+        typer.echo(
+            f"    player MAE change {delta['mean']:+.4f} min (standard error {delta['se']:.4f}, "
+            f"{delta['squads']:,} squads): "
+            + ("significantly worse" if worse else "not significantly worse")
+        )
+    ok = bool(r["enabled"])
+    typer.secho(
+        f"  {'ON - predictions will use it' if ok else 'OFF - did not pass, predictions unchanged'}"
+        + ("" if save else "  (dry run, nothing saved)"),
+        fg=typer.colors.GREEN if ok else typer.colors.YELLOW,
+        bold=True,
+    )
+    if save:
+        typer.echo(f"  saved: {reconciliation_path()}")
+        if ok:
+            typer.echo("  next:  euroleague-ai ml predict --days 7")
 
 
 @ml_app.command("models")
@@ -1434,6 +1527,8 @@ def cmd_ml_predict(
     )
     for target, model in (result.get("models") or {}).items():  # type: ignore[union-attr]
         typer.echo(f"    {target:<24} {model}")
+    if "minutes_reconciliation" in result:  # type: ignore[operator]
+        typer.echo(f"    {'squad minutes':<24} {result['minutes_reconciliation']}")  # type: ignore[index]
     if result["games"] == 0:  # type: ignore[index]
         typer.secho(
             "  No scheduled games in the window. Ingest a season with upcoming\n"

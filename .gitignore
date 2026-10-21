@@ -37,3 +37,6 @@ data/models/*
 *.swp
 .DS_Store
 Thumbs.db
+
+# Database dumps
+*.dump

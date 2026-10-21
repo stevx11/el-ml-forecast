@@ -87,6 +87,7 @@ euroleague-ai ingest seasons --from 2016 --to 2025 --wait   # backfill history, 
 euroleague-ai features backfill --from 2016 --to 2025       # build as_of snapshots (incl. roster candidates)
 euroleague-ai ml baselines                                  # publish the bar to beat
 euroleague-ai ml train                                      # train all five targets, then P(plays)
+euroleague-ai ml reconcile                                  # fit squad-minutes scaling (after each train)
 euroleague-ai ml predict --days 7                           # project upcoming fixtures
 euroleague-ai ml why --game-code 120 --player petrovic      # explain one projection
 euroleague-ai ml score                                      # score finished games
