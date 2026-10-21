@@ -485,7 +485,7 @@ function openDrawer(playerId) {
         ${esc(report.status.toLowerCase())}${report.reason && report.source !== "NEWS" ? ` (${esc(report.reason)})` : ""}, ${esc(scope)} ·
         ${report.source === "NEWS"
           ? `read from news (confidence ${fmt(report.confidence, 2)})${report.applied ? "" : ", not applied"}`
-          : "entered manually"} ·
+          : report.source === "REPORT" ? "from the injury report" : "entered manually"} ·
         ${esc(new Date(report.reported_at).toLocaleString())}</p>`;
     }
     if (plays.drivers?.length) {

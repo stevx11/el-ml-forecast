@@ -651,6 +651,77 @@ def cmd_injuries_import(
         _print_report(item)
 
 
+@injuries_app.command("report")
+def cmd_injuries_report(
+    file: Annotated[
+        str | None,
+        typer.Option("--file", "-f", help="Read a saved copy of the page instead of fetching it."),
+    ] = None,
+    show: Annotated[bool, typer.Option("--unmatched", help="List rows with no rostered player.")] = False,
+) -> None:
+    """Read the daily injury table (INJURY_REPORT_URL) and record what changed.
+
+    Only changes are written: a new status, scope or comment, or a player who
+    has dropped off the table (recorded as back). Running it twice in a row
+    writes nothing the second time.
+    """
+    from pathlib import Path
+
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.news.injury_report import (
+        ReportFormatError,
+        fetch_injury_report,
+        import_injury_report,
+    )
+
+    settings = get_settings()
+    url = settings.injury_report_url
+    if not url and not file:
+        typer.secho("  INJURY_REPORT_URL is not set (see .env.example), and no --file given.",
+                    fg=typer.colors.RED)
+        raise typer.Exit(code=1)
+
+    async def job() -> object:
+        page = (
+            Path(file).read_text(encoding="utf-8")
+            if file
+            else await fetch_injury_report(url or "", settings=settings)
+        )
+        async with session_scope() as session:
+            imported = await import_injury_report(
+                session, page, url=url or "https://basketnews.com/injury-report", now=SystemClock().now()
+            )
+            await session.commit()
+            return imported
+
+    try:
+        result = _run(job)
+    except ReportFormatError as exc:
+        typer.secho(f"  {exc}. Nothing was written.", fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+    r: Any = result
+    typer.echo(
+        f"  {r.rows} rows, {r.matched} matched to rostered players, {len(r.unmatched)} not rostered"
+    )
+    typer.echo(f"  {r.written} changed, {r.cleared} back (off the table), {r.unchanged} unchanged")
+    for change in r.changes:
+        scope = {
+            "game": f"game {change['game_code']}",
+            "until": f"until {change['until']}",
+            "open": "until back",
+        }[change["scope"]]
+        rules_out = change["status"] in ("OUT", "SUSPENDED")
+        typer.secho(
+            f"    {change['team']:<5}{change['player']:<28}{change['status']:<14}{scope:<18}"
+            f"{(change['reason'] or '')[:70]}",
+            fg=typer.colors.RED if rules_out else None,
+        )
+    if show and r.unmatched:
+        typer.echo("  not on a current roster (usually players outside the EuroLeague squad):")
+        for name in r.unmatched:
+            typer.echo(f"    {name}")
+
+
 @injuries_app.command("list")
 def cmd_injuries_list() -> None:
     """Reports that apply to each team's next game right now."""

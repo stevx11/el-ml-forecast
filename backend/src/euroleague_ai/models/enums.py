@@ -68,6 +68,9 @@ class StatusSourceType(StrEnum):
     PROVIDER = "PROVIDER"
     NEWS = "NEWS"
     MANUAL = "MANUAL"
+    #: A published injury table (BasketNews). Authoritative like a manual entry:
+    #: one row per player, statuses chosen by an editor, not read from prose.
+    REPORT = "REPORT"
 
 
 class NewsEventType(StrEnum):

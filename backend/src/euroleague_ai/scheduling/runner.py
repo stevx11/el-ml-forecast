@@ -155,6 +155,8 @@ async def run_daily(
     if not skip_ingest:
         result.steps.append(await _step_ingest(session, season=season, clock=clock))
     result.steps.append(await _step_score(session, season=season, clock=clock))
+    if settings.injury_report_url:
+        result.steps.append(await _step_injury_report(session, settings=settings, clock=clock))
     if settings.news_feed_urls:
         # Before predicting, so this morning's injury news reaches this
         # afternoon's projections.
@@ -216,6 +218,23 @@ async def _step_score(session: AsyncSession, *, season: str, clock: Clock) -> St
         await session.rollback()
         logger.warning("pipeline scoring failed", extra={"error": str(exc)})
         return StepResult("score", False, error=str(exc))
+
+
+async def _step_injury_report(
+    session: AsyncSession, *, settings: Settings, clock: Clock
+) -> StepResult:
+    """Read the daily injury table and record what changed."""
+    from euroleague_ai.news.injury_report import collect_injury_report
+
+    try:
+        imported = await collect_injury_report(session, settings=settings, now=clock.now())
+        await session.commit()
+        return StepResult("injury_report", True, detail=imported.as_dict())
+    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+        await session.rollback()
+        logger.warning("pipeline injury report failed", extra={"error": str(exc)})
+        # Not fatal: predictions still run on the reports already stored.
+        return StepResult("injury_report", False, error=str(exc))
 
 
 async def _step_news(session: AsyncSession, *, settings: Settings, clock: Clock) -> StepResult:

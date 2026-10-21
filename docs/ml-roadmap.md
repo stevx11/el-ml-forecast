@@ -282,7 +282,10 @@ for 6 to 8 weeks" lasts until the lower bound; anything else is open but lapses 
 8 days unless a newer article repeats it. Recaps ("last played in Round 2", "it was
 communicated that…") are discounted below the rule-out threshold. After a rules
 change, `news extract --replace --days N` re-reads stored articles and drops the
-old readings. Manual entry remains for overrides:
+old readings. The daily BasketNews table (`injuries report`, `source = REPORT`) is the
+primary source: one row per player for all 20 clubs, statuses set by an editor,
+the Round column as scope, only changes written, and a player who drops off the
+table recorded as back. Manual entry remains for overrides:
 `euroleague-ai injuries set|import|list|history`. Reports are scoped to one game,
 to every game before a return date, or open-ended until the player plays again.
 

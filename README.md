@@ -90,6 +90,7 @@ euroleague-ai ml train                                      # train all five tar
 euroleague-ai news collect                                  # fetch feeds, read injuries out of articles
 euroleague-ai news injuries                                 # what was read: published date, scope, sentence
 euroleague-ai news extract --replace --days 30              # re-read stored articles after a rules change
+euroleague-ai injuries report                               # read the daily injury table, record what changed
 euroleague-ai injuries list                                 # reports that apply to next games
 euroleague-ai injuries set Petrovic out --reason knee      # manual override (before T-60 min)
 euroleague-ai ml reconcile                                  # fit squad-minutes scaling (after each train)
@@ -236,7 +237,7 @@ Every trained model is recorded in a registry with its training data, scores, an
 | Schedule | `/competitions/{c}/seasons/{s}/games` |
 | Box scores | `/competitions/{c}/seasons/{s}/games/{code}/stats` |
 
-**News and injuries**: `NEWS_FEED_URLS` points at RSS feeds with full article text (the Eurohoops EuroLeague feed by default). `news collect`, which the scheduler runs before predictions, stores new articles with the time they were fetched, then reads injury statuses out of them by rule. It matches rostered players by name, takes the status from the wording ("ruled out", "game-time decision", "returns from"), and skips negations and past tense. Each reading keeps its sentence and a confidence. A confident "out" (0.8 or higher) sets P(plays) to 0 and squad minutes go to teammates; weaker readings are flagged only. `news injuries` lists what was read. Reports can also be entered by hand with `injuries set` or `injuries import`, and the newest report wins. The official EuroLeague site blocks automated access, so it is not read directly.
+**News and injuries**: `NEWS_FEED_URLS` points at RSS feeds with full article text (the Eurohoops EuroLeague feed by default). `news collect`, which the scheduler runs before predictions, stores new articles with the time they were fetched, then reads injury statuses out of them by rule. It matches rostered players by name, takes the status from the wording ("ruled out", "game-time decision", "returns from"), and skips negations and past tense. Each reading keeps its sentence and a confidence. A confident "out" (0.8 or higher) sets P(plays) to 0 and squad minutes go to teammates; weaker readings are flagged only. `news injuries` lists what was read. `INJURY_REPORT_URL` points at BasketNews's daily EuroLeague injury table (one row per player, all 20 clubs); `injuries report`, which the scheduler also runs, records each player's status, the rounds it covers ("Round 7" is one game, "Round 7-9" runs through round 9) and the comment, writes only what changed, and records a player who drops off the table as back. Reports can also be entered by hand with `injuries set` or `injuries import`, and the newest report wins. The official EuroLeague site blocks automated access, so it is not read directly.
 
 **Domestic leagues** (ABA, ACB, ...) need no schema change: a different `league_id`, same tables. This is currently blocked on a data source, not on architecture.
 

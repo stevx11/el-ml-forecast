@@ -126,6 +126,12 @@ class Settings(BaseSettings):
         description="RSS/Atom feeds you are permitted to poll. Empty by default.",
     )
     news_fetch_timeout_seconds: Annotated[float, Field(gt=0)] = 20.0
+    #: A daily-updated injury table read by ``injuries report`` and by the
+    #: scheduler before each prediction run. Empty disables it.
+    injury_report_url: str | None = None
+    #: The page sits behind a CDN that turns away clients without a browser-like
+    #: User-Agent. Identifies the project after the browser token.
+    injury_report_user_agent: str = "Mozilla/5.0 (compatible; euroleague-ai/0.1)"
 
     @field_validator("news_feed_urls", mode="before")
     @classmethod
