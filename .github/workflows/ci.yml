@@ -55,7 +55,7 @@ jobs:
         # is ever added, change this to ".[dev,ml]".
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,ml]"
 
       - name: Create the test database
         # The service container creates POSTGRES_DB only. The suite writes to a
