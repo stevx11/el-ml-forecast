@@ -39,6 +39,18 @@ from typing import Any
 #: rather than being silently dropped.
 _THEME_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     # (theme, substrings, exact names)
+    (
+        # v6 names that contain "game_" or "team_" without being about the game
+        # script or the team's strength. First, so no substring rule claims them.
+        "schedule",
+        (),
+        ("days_to_next_team_game", "next_game_within_3d", "is_postseason"),
+    ),
+    (
+        "form",
+        (),
+        ("venue_points_diff", "venue_minutes_diff"),
+    ),
     #
     # Order is load-bearing. Two traps caught here:
     #
@@ -91,11 +103,18 @@ _THEME_RULES: tuple[tuple[str, tuple[str, ...], tuple[str, ...]], ...] = (
     (
         "teammates",
         ("teammate", "rotation_"),
-        ("player_missed_recent_games", "player_played_last_game", "squad_games_observed"),
+        (
+            "player_missed_recent_games",
+            "player_played_last_game",
+            "squad_games_observed",
+            "recent_played_share",
+            "recent_team_games",
+            "not_debuted_for_club",
+        ),
     ),
     (
         "team",
-        ("team_",),
+        ("team_", "coach_"),
         ("is_home",),
     ),
     (

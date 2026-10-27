@@ -19,6 +19,11 @@ Families:
                      fixture -- how the game itself is likely to unfold.
 ``position``         Listed position, and where the player ranks among
                      teammates competing for the same minutes.
+``appearances``      (v6) Share of the team's last five games he played, and
+                     whether he has debuted for the club.
+``opponent_position``  (v6) What the opponent allows to his position group.
+``coach``            (v6) Current coach's games in charge.
+``schedule_venue``   (v6) Next fixture, postseason flag, home/away split.
 ===================  =========================================================
 """
 
@@ -32,6 +37,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from euroleague_ai.core.clock import ensure_utc
 from euroleague_ai.features.availability import SQUAD_WINDOW, summarise_squad
+from euroleague_ai.features.context_v6 import build_v6_features
 from euroleague_ai.features.player_form import build_player_form_features
 from euroleague_ai.features.position import COMPETITION_WINDOW, summarise_position
 from euroleague_ai.features.team_context import build_team_context_features
@@ -54,7 +60,25 @@ from euroleague_ai.repositories.history import TeamHistoryRepository
 #: different *meaning* -- ``last5_points_mean`` now spans the summer break -- so
 #: v2 snapshots and v3 snapshots must never be mixed in one training set. That is
 #: exactly what this version string prevents.
-FEATURE_SET_VERSION = "v5"
+#: v6: recent appearances, opponent defence by position, coach tenure, next
+#: fixture, postseason and home/away split (features/context_v6.py). Additive
+#: only: every v5 feature keeps its name and meaning, which is what lets v5
+#: models be served from v6 vectors until the backfill and retrain are done.
+FEATURE_SET_VERSION = "v6"
+
+#: Which model feature sets the current builder can serve. A model picks its
+#: own columns out of the vector by name, so a later set that only *adds*
+#: features can serve models trained on the earlier one. A version that changes
+#: any existing feature's meaning (v3 did) must not be listed here.
+SERVES: dict[str, frozenset[str]] = {
+    "v6": frozenset({"v5", "v6"}),
+}
+
+
+def can_serve(model_feature_set: str, current: str = FEATURE_SET_VERSION) -> bool:
+    """Whether a model trained on ``model_feature_set`` can be served now."""
+    return model_feature_set in SERVES.get(current, frozenset({current}))
+
 
 FEATURE_FAMILIES = (
     "form",
@@ -65,6 +89,10 @@ FEATURE_FAMILIES = (
     "availability",
     "game",
     "position",
+    "appearances",
+    "opponent_position",
+    "coach",
+    "schedule_venue",
 )
 
 
@@ -77,7 +105,8 @@ async def build_player_features(
     as_of: datetime,
     season_id: uuid.UUID | None = None,
     is_home: bool | None = None,
-    cache: dict[Any, dict[str, float | None]] | None = None,
+    cache: dict[Any, Any] | None = None,
+    game: Any = None,
 ) -> dict[str, float | None]:
     """Build the complete feature vector for one player-game as of one instant.
 
@@ -94,6 +123,9 @@ async def build_player_features(
         as_of: Cutoff. Nothing recorded after this instant may contribute.
         season_id: Restricts season-scoped features to one season.
         is_home: Whether the upcoming game is at home.
+        game: The game being predicted, for the schedule and phase features.
+            Optional so a vector can be built without one (feature names, ad
+            hoc checks); those features are then missing.
         cache: Optional per-game memo. Three of the four families -- team
             context, availability and position -- depend only on
             ``(team, opponent, as_of)`` and are therefore identical for every
@@ -148,7 +180,7 @@ async def build_player_features(
     # player, twelve players a side, for data that changes once per game.
     squad_key = ("squad", team_id, as_of, season_id)
     if cache is not None and squad_key in cache:
-        appearances, competition, positions = cache[squad_key]  # type: ignore[misc]
+        appearances, competition, positions = cache[squad_key]
     else:
         teams = TeamHistoryRepository(session)
         appearances = await teams.squad_appearances(
@@ -168,7 +200,7 @@ async def build_player_features(
             team_id, as_of=as_of, season_id=season_id
         )
         if cache is not None:
-            cache[squad_key] = (appearances, competition, positions)  # type: ignore[assignment]
+            cache[squad_key] = (appearances, competition, positions)
 
     features.update(summarise_squad(appearances, player_id=player_id))
     features.update(
@@ -177,6 +209,20 @@ async def build_player_features(
         )
     )
 
+    features.update(
+        await build_v6_features(
+            session,
+            player_id=player_id,
+            team_id=team_id,
+            opponent_team_id=opponent_team_id,
+            as_of=as_of,
+            season_id=season_id,
+            game=game,
+            is_home=is_home,
+            position=positions.get(player_id),
+            cache=cache,
+        )
+    )
     return features
 
 

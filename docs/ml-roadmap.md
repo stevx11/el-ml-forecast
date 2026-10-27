@@ -287,6 +287,27 @@ strictly worse than an honest point estimate, because it invites trust it has no
 
 ---
 
+## Feature set v6
+
+`features/context_v6.py` adds four families, every one additive (no v5 feature
+changes name or meaning), which is why v6 vectors can serve v5 models
+(`features.registry.SERVES`) until the backfill and retrain are done:
+
+- **appearances**: share of the team's last five games this season he played,
+  team games in that window, not yet debuted for the club;
+- **opponent_position**: what the opponent allowed to his position group over its
+  last ten games (points, assists, threes, rebounds per game; share of points);
+- **coach**: the current coach's games in charge, changed within five games;
+- **schedule_venue**: days to the team's next fixture (fixtures are knowable seven
+  days ahead, live and in the backfill alike), a within-three-days flag, a
+  postseason flag, and his home/away points and minutes split.
+
+Leak tests in `tests/integration/test_features_v6.py` cover late box scores,
+late fixtures and coach changes. Rollout: `features backfill` (v6 snapshots), then
+`ml ablate` (each family removed in turn, against twice the retraining noise),
+`EXCLUDED_FEATURE_FAMILIES` for any family that helps nothing, `ml train` (gated
+season by season), `ml reconcile`, `ml predict`.
+
 ## Phase 5a — Injury reports (started)
 
 Collected automatically from news feeds with full text (`news collect`, run by the

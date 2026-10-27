@@ -94,6 +94,7 @@ euroleague-ai injuries report                               # read the daily inj
 euroleague-ai injuries list                                 # reports that apply to next games
 euroleague-ai injuries check --round 7                      # after a round: did ruled-out players sit, ready ones play?
 euroleague-ai injuries set Petrovic out --reason knee      # manual override (before T-60 min)
+euroleague-ai ml ablate                                     # which v6 feature families help? (after the v6 backfill)
 euroleague-ai ml spread                                     # are projections as spread out as real box scores?
 euroleague-ai ml walkforward                                # train on seasons < N, test on N, for recent seasons (slow)
 euroleague-ai ml reconcile                                  # fit squad minutes + stat-line scaling (after each train)

@@ -88,6 +88,7 @@ async def build_and_store_player_snapshot(
         as_of=cutoff,
         season_id=game.season_id,
         is_home=team_id == game.home_team_id,
+        game=game,
     )
 
     snapshot = PlayerFeatureSnapshot(

@@ -35,7 +35,7 @@ from euroleague_ai.core.clock import Clock, SystemClock
 from euroleague_ai.core.config import Settings, get_settings
 from euroleague_ai.core.errors import NotFoundError
 from euroleague_ai.core.logging import get_logger
-from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features
+from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features, can_serve
 from euroleague_ai.ml.distribution import ResidualDistribution, threshold_cutoff, thresholds_for
 from euroleague_ai.ml.expectation import (
     SOURCE_BOOSTER,
@@ -294,7 +294,7 @@ async def load_active_models(
         # ``last5_points_mean`` crosses the summer break and in v2 it did not --
         # so a mismatch produces confident, silently wrong predictions rather
         # than an error. Skip loudly instead.
-        if model_version.feature_set_version != FEATURE_SET_VERSION:
+        if not can_serve(model_version.feature_set_version):
             stale.append(
                 f"{target}: {model_version.name} {model_version.version} "
                 f"trained on {model_version.feature_set_version}"
@@ -384,6 +384,7 @@ async def predict_game(
                 season_id=game.season_id,
                 is_home=is_home,
                 cache=feature_cache,
+                game=game,
             )
             snapshot_id = await _upsert_snapshot(
                 session,

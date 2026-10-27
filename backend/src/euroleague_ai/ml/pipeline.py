@@ -23,6 +23,14 @@ logger = get_logger(__name__)
 MIN_ROWS = 2_000
 
 
+def _excluded() -> frozenset[str]:
+    """Features of the families listed in EXCLUDED_FEATURE_FAMILIES."""
+    from euroleague_ai.core.config import get_settings
+    from euroleague_ai.features.context_v6 import excluded_feature_names
+
+    return excluded_feature_names(get_settings().excluded_feature_families)
+
+
 async def train_and_register(
     session: AsyncSession,
     *,
@@ -83,6 +91,11 @@ async def train_and_register(
                 resolved_params = tuned
                 tuned_note = "tuned"
 
+        excluded = _excluded()
+        if excluded:
+            from euroleague_ai.ml.ablation import strip
+
+            rows = strip(rows, excluded)
         result = train_target(rows, target, params=resolved_params)
         gate: dict[str, Any] | None = None
         if walkforward:

@@ -990,6 +990,13 @@ async def train_and_register_availability(
             )
         return report
 
+    from euroleague_ai.features.context_v6 import excluded_feature_names
+
+    excluded = excluded_feature_names((settings or get_settings()).excluded_feature_families)
+    if excluded:
+        from euroleague_ai.ml.ablation import strip
+
+        rows = strip(rows, excluded)
     result = train_availability(rows, params=params)
     model_version = await register_availability_model(
         session,

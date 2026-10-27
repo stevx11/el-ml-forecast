@@ -25,7 +25,10 @@ pytestmark = [pytest.mark.integration, requires_db]
 @pytest.fixture(scope="module")
 def result() -> Any:
     return train_target(
-        _rows(seasons=3, games=100), PredictionTarget.POINTS, num_rounds=80, early_stopping=10,
+        _rows(seasons=3, games=100),
+        PredictionTarget.POINTS,
+        num_rounds=80,
+        early_stopping=10,
         fit_expected=False,
     )
 
@@ -42,8 +45,12 @@ def _gate(passes: bool | None) -> dict[str, Any]:
     }
 
 
-async def _register(session: AsyncSession, result: Any, tmp_path: Path, **kwargs: Any) -> ModelVersion:
-    return await register_model(session, result, feature_set_version="v5", artifact_root=tmp_path, **kwargs)
+async def _register(
+    session: AsyncSession, result: Any, tmp_path: Path, **kwargs: Any
+) -> ModelVersion:
+    return await register_model(
+        session, result, feature_set_version="v5", artifact_root=tmp_path, **kwargs
+    )
 
 
 class TestSeasonGate:
@@ -61,12 +68,16 @@ class TestSeasonGate:
         first = await _register(session, result, tmp_path, season_gate=_gate(True))
         second = await _register(session, result, tmp_path, season_gate=_gate(True))
         active = (
-            await session.execute(
-                select(ModelVersion.id).where(
-                    ModelVersion.target == PredictionTarget.POINTS, ModelVersion.is_active
+            (
+                await session.execute(
+                    select(ModelVersion.id).where(
+                        ModelVersion.target == PredictionTarget.POINTS, ModelVersion.is_active
+                    )
                 )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert active == [second.id] and first.id != second.id
 
     async def test_an_unjudged_gate_falls_back_to_the_single_split(

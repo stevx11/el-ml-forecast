@@ -1720,6 +1720,94 @@ def cmd_ml_spread(
             )
 
 
+@ml_app.command("ablate")
+def cmd_ml_ablate(
+    target: Annotated[
+        str | None,
+        typer.Option("--target", "-t", help="One target, e.g. POINTS or PLAYS. Default: all six."),
+    ] = None,
+) -> None:
+    """Which v6 feature families help? Retrain without each and compare.
+
+    Needs the v6 backfill (`features backfill`). For each target: the full v6
+    model, a v5-only model, and one model per v6 family removed, on the same
+    rows and split. A family helps a target when removing it makes test MAE
+    (log loss for P(plays)) worse by more than twice the retraining noise,
+    measured by training the full model three more times with other seeds.
+    Nothing is registered. Slow: nine trainings per target.
+    """
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.features.registry import FEATURE_SET_VERSION
+    from euroleague_ai.ml.ablation import ablate, save_report, verdict
+    from euroleague_ai.ml.availability import load_availability_rows
+    from euroleague_ai.ml.dataset import load_training_rows
+    from euroleague_ai.ml.pipeline import MIN_ROWS
+    from euroleague_ai.ml.report import SERVED_TARGETS
+    from euroleague_ai.ml.tuning import load_params
+    from euroleague_ai.models.enums import PredictionTarget
+
+    targets: tuple[PredictionTarget, ...] = SERVED_TARGETS
+    if target:
+        try:
+            targets = (PredictionTarget[target.upper()],)
+        except KeyError as exc:
+            raise typer.BadParameter(f"unknown target {target!r}") from exc
+
+    async def job() -> object:
+        reports = []
+        async with session_scope() as session:
+            for t in targets:
+                rows: list[Any]
+                if t is PredictionTarget.PLAYS:
+                    rows, _ = await load_availability_rows(
+                        session, feature_set_version=FEATURE_SET_VERSION
+                    )
+                    params = None
+                else:
+                    rows = await load_training_rows(
+                        session, target=t, feature_set_version=FEATURE_SET_VERSION
+                    )
+                    params = load_params(t)
+                if len(rows) < MIN_ROWS:
+                    typer.secho(
+                        f"  {t.name}: only {len(rows):,} {FEATURE_SET_VERSION} rows. Run "
+                        "`euroleague-ai features backfill` first.",
+                        fg=typer.colors.RED,
+                    )
+                    continue
+                typer.echo(f"  {t.name}: {len(rows):,} rows, 9 trainings...")
+                reports.append(ablate(t, rows, params=params))
+        path = save_report(reports, now=SystemClock().now()) if reports else None
+        return reports, path
+
+    out: Any = _run(job)
+    reports, path = out
+    for report in reports:
+        typer.echo("")
+        metric = "log loss" if report["metric"] == "log_loss" else "test MAE"
+        typer.secho(
+            f"  {report['target']} - {metric}, change vs all v6 "
+            f"(retraining noise {report['noise_pct']:.2f}%, helps above {report['helps_above_pct']:.2f}%)",
+            bold=True,
+        )
+        for row in report["variants"]:
+            mark = "  helps" if row["helps"] else ""
+            typer.secho(
+                f"    {row['variant']:<30}{row['score']:>10.4f}{row['change_pct']:>+9.2f}%{mark}",
+                fg=typer.colors.GREEN if row["helps"] else None,
+            )
+    if reports:
+        typer.echo("")
+        typer.secho("  Families", bold=True)
+        for family, helped in verdict(reports).items():
+            typer.secho(
+                f"    {family:<20}"
+                + (f"helps {', '.join(helped)}" if helped else "helps nothing: consider dropping it"),
+                fg=typer.colors.GREEN if helped else typer.colors.YELLOW,
+            )
+        typer.echo(f"  saved: {path}")
+
+
 @ml_app.command("walkforward")
 def cmd_ml_walkforward(
     target: Annotated[

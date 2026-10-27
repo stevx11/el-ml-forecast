@@ -133,6 +133,21 @@ class Settings(BaseSettings):
     #: User-Agent. Identifies the project after the browser token.
     injury_report_user_agent: str = "Mozilla/5.0 (compatible; euroleague-ai/0.1)"
 
+    # -- Features ------------------------------------------------------------
+    #: v6 feature families left out of training, e.g. ``coach,schedule_venue``,
+    #: for families `ml ablate` found to help nothing. Snapshots keep them, so
+    #: changing this needs a retrain but never a backfill. Empty keeps all.
+    excluded_feature_families: Annotated[list[str], NoDecode] = Field(default_factory=list)
+
+    @field_validator("excluded_feature_families", mode="before")
+    @classmethod
+    def _split_families(cls, value: object) -> object:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [part.strip() for part in value.split(",") if part.strip()]
+        return value
+
     @field_validator("news_feed_urls", mode="before")
     @classmethod
     def _split_feed_urls(cls, value: object) -> object:

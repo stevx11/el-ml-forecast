@@ -249,6 +249,7 @@ async def backfill_game(
             season_id=game.season_id,
             is_home=target.is_home,
             cache=cache,
+            game=game,
         )
 
         # ON CONFLICT rather than a pre-check: two concurrent backfills, or a
