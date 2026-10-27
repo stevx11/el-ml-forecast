@@ -70,9 +70,8 @@ class TestMigrationMatchesModels:
         async with engine.connect() as connection:
             differences = await connection.run_sync(_diff)
 
-        assert not differences, (
-            "models and migration have drifted apart:\n"
-            + "\n".join(f"  {item}" for item in differences)
+        assert not differences, "models and migration have drifted apart:\n" + "\n".join(
+            f"  {item}" for item in differences
         )
 
     async def test_alembic_version_is_stamped(self, engine: AsyncEngine) -> None:

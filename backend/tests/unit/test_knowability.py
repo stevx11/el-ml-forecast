@@ -101,9 +101,7 @@ class TestTheInvariantThatWasViolated:
             datetime(2025, 10, 31, 18, 0, tzinfo=UTC),
         ],
     )
-    def test_every_backfilled_game_is_knowable_before_the_next_one(
-        self, tip_off: datetime
-    ) -> None:
+    def test_every_backfilled_game_is_knowable_before_the_next_one(self, tip_off: datetime) -> None:
         """A box score must be visible to any cutoff after the game ends.
 
         If this fails, form windows are empty, every feature is null, and the

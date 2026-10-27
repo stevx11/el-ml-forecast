@@ -142,9 +142,7 @@ async def check_coverage(session: AsyncSession, report: QualityReport) -> None:
     # counts usually mean an older format, not corrupt data -- but schedule
     # features are not comparable across the boundary.
     unusual = [
-        f"{code}: {games} games"
-        for code, games, *_ in rows
-        if games and not (150 <= games <= 500)
+        f"{code}: {games} games" for code, games, *_ in rows if games and not (150 <= games <= 500)
     ]
     if unusual:
         report.add(
@@ -213,14 +211,11 @@ async def check_rebound_totals(session: AsyncSession, report: QualityReport) -> 
         )
 
 
-async def check_made_not_exceeding_attempted(
-    session: AsyncSession, report: QualityReport
-) -> None:
+async def check_made_not_exceeding_attempted(session: AsyncSession, report: QualityReport) -> None:
     """Makes cannot exceed attempts. A violation means the mapping is misaligned."""
     count = await _scalar(
         session,
-        "SELECT count(*) FROM player_game_stats "
-        "WHERE fg2m > fg2a OR fg3m > fg3a OR ftm > fta",
+        "SELECT count(*) FROM player_game_stats WHERE fg2m > fg2a OR fg3m > fg3a OR ftm > fta",
     )
     if count:
         report.add(
@@ -578,9 +573,7 @@ async def run_quality_checks(session: AsyncSession) -> QualityReport:
     for check in ALL_CHECKS:
         try:
             await check(session, report)
-        except Exception as exc:  # noqa: BLE001 - one broken check must not hide the rest
+        except Exception as exc:
             logger.exception("quality check failed", extra={"check": check.__name__})
-            report.add(
-                Finding(check.__name__, Severity.ERROR, f"check itself failed: {exc}")
-            )
+            report.add(Finding(check.__name__, Severity.ERROR, f"check itself failed: {exc}"))
     return report

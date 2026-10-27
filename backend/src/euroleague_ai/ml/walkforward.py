@@ -240,7 +240,9 @@ def evaluate_target(
 MIN_GATE_SEASONS = 2
 
 
-def season_gate(result: TargetWalkForward, *, min_seasons: int = MIN_GATE_SEASONS) -> dict[str, Any]:
+def season_gate(
+    result: TargetWalkForward, *, min_seasons: int = MIN_GATE_SEASONS
+) -> dict[str, Any]:
     """Activation rule from the per-season folds.
 
     Judged on complete seasons only: the season still being played is shown but

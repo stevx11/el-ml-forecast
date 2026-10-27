@@ -66,11 +66,19 @@ _PHRASES: tuple[tuple[str, AvailabilityStatus, float], ...] = (
     (r"(?:set|expected|going) to miss", AvailabilityStatus.OUT, 0.85),
     (r"not expected to (?:play|feature|be available)", AvailabilityStatus.OUT, 0.8),
     (r"downgraded to out", AvailabilityStatus.OUT, 0.9),
-    (r"(?:is|are|remains?|will be|is still|are still|are all|are both) out\b", AvailabilityStatus.OUT, 0.85),
+    (
+        r"(?:is|are|remains?|will be|is still|are still|are all|are both) out\b",
+        AvailabilityStatus.OUT,
+        0.85,
+    ),
     (r"(?:has|have) been out\b", AvailabilityStatus.OUT, 0.85),
     (r"out (?:for|with|indefinitely|of action)\b", AvailabilityStatus.OUT, 0.85),
     (r"sidelined", AvailabilityStatus.OUT, 0.85),
-    (r"(?:won t|will not|cannot|can t) (?:play|feature|travel|be available)", AvailabilityStatus.OUT, 0.85),
+    (
+        r"(?:won t|will not|cannot|can t) (?:play|feature|travel|be available)",
+        AvailabilityStatus.OUT,
+        0.85,
+    ),
     (r"(?:did|does|will) not travel", AvailabilityStatus.OUT, 0.85),
     (r"(?:is|are|remains?|will be) unavailable", AvailabilityStatus.OUT, 0.85),
     (r"(?:is|are) injured", AvailabilityStatus.OUT, 0.7),
@@ -87,15 +95,25 @@ _PHRASES: tuple[tuple[str, AvailabilityStatus, float], ...] = (
     (r"(?:upgraded|downgraded) to questionable", AvailabilityStatus.QUESTIONABLE, 0.85),
     (r"questionable", AvailabilityStatus.QUESTIONABLE, 0.75),
     (r"day to day", AvailabilityStatus.QUESTIONABLE, 0.7),
-    (r"(?:is|are) (?:now )?listed as (?:questionable|doubtful|a game time decision)",
-     AvailabilityStatus.QUESTIONABLE, 0.75),
+    (
+        r"(?:is|are) (?:now )?listed as (?:questionable|doubtful|a game time decision)",
+        AvailabilityStatus.QUESTIONABLE,
+        0.75,
+    ),
     (r"(?:could|may|might) miss", AvailabilityStatus.QUESTIONABLE, 0.65),
-    (r"(?:status|future|availability) (?:remains? |is )?(?:uncertain|unclear)", AvailabilityStatus.QUESTIONABLE, 0.6),
+    (
+        r"(?:status|future|availability) (?:remains? |is )?(?:uncertain|unclear)",
+        AvailabilityStatus.QUESTIONABLE,
+        0.6,
+    ),
     (r"(?:is|remains?) uncertain", AvailabilityStatus.QUESTIONABLE, 0.6),
     (r"question mark", AvailabilityStatus.QUESTIONABLE, 0.6),
     # Available
-    (r"(?:is|are) (?:all |both |also |now )?(?:back|available|fit)\b",
-     AvailabilityStatus.AVAILABLE, 0.8),
+    (
+        r"(?:is|are) (?:all |both |also |now )?(?:back|available|fit)\b",
+        AvailabilityStatus.AVAILABLE,
+        0.8,
+    ),
     (r"(?:is|are) back (?:available|in action|in the squad)", AvailabilityStatus.AVAILABLE, 0.85),
     (r"available (?:once )?again", AvailabilityStatus.AVAILABLE, 0.8),
     (r"(?:is|are) (?:now )?listed as (?:available|probable)", AvailabilityStatus.AVAILABLE, 0.8),
@@ -132,15 +150,27 @@ _GAME_REF = re.compile(
     r"|\bfor round \d+\b|\btonight\b"
 )
 _NUMBER_WORDS = {
-    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5, "six": 6, "seven": 7,
-    "eight": 8, "nine": 9, "ten": 10, "a couple of": 2, "a few": 2, "several": 2,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+    "nine": 9,
+    "ten": 10,
+    "a couple of": 2,
+    "a few": 2,
+    "several": 2,
 }
 _NUMBER = r"(\d+|one|two|three|four|five|six|seven|eight|nine|ten|a couple of|a few|several)"
 #: "out for 6 to 8 weeks", "set to miss 20 days", "sidelined for several months".
 #: The lower bound is used: coming back early is far more common than a player
 #: staying out past the low end, and an over-long absence is the costlier error.
 _DURATION = re.compile(
-    rf"(?<!last )(?<!past )(?<!previous )\b{_NUMBER}(?: (?:to|or) {_NUMBER})? (days?|weeks?|months?)\b"
+    rf"(?<!last )(?<!past )(?<!previous )\b{_NUMBER}(?: (?:to|or) {_NUMBER})? "
+    r"(days?|weeks?|months?)\b"
 )
 _UNIT_DAYS = {"day": 1, "week": 7, "month": 30}
 #: Applied to the raw sentence, before punctuation is normalised away. Commas
@@ -244,7 +274,11 @@ def _best_phrase(clause: str) -> tuple[AvailabilityStatus, float, str] | None:
         for match in pattern.finditer(clause):
             before = clause[: match.start()]
             phrase = match.group(0)
-            if " not " not in f" {phrase} " and " t " not in f" {phrase} " and _NEGATION.search(before):
+            if (
+                " not " not in f" {phrase} "
+                and " t " not in f" {phrase} "
+                and _NEGATION.search(before)
+            ):
                 continue
             score = confidence - (_PAST_PENALTY if _PAST.search(before) else 0.0)
             if best is None or (score, _PRIORITY[status]) > (best[1], _PRIORITY[best[0]]):
@@ -364,7 +398,9 @@ def extract_statuses(text: str, index: RosterIndex) -> list[Extracted]:
                 pid = forms.player.player_id
                 if any(p.search(clause) for p in forms.full):
                     found.append((forms, False))
-                elif pid in introduced and forms.surname is not None and forms.surname.search(clause):
+                elif (
+                    pid in introduced and forms.surname is not None and forms.surname.search(clause)
+                ):
                     found.append((forms, True))
             clause_players.append(found)
 

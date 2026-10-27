@@ -41,7 +41,12 @@ from euroleague_ai.models.availability import PlayerStatusEvent
 from euroleague_ai.models.enums import AvailabilityStatus, NewsEventType, StatusSourceType
 from euroleague_ai.models.game import Game
 from euroleague_ai.models.news import NewsArticle, NewsEvent
-from euroleague_ai.news.injury_extract import EXTRACTOR_VERSION, Extracted, RosterIndex, extract_statuses
+from euroleague_ai.news.injury_extract import (
+    EXTRACTOR_VERSION,
+    Extracted,
+    RosterIndex,
+    extract_statuses,
+)
 from euroleague_ai.news.store import store_articles
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
@@ -108,7 +113,9 @@ async def _first_game_after(
 
 
 def _article_text(article: NewsArticle) -> str:
-    return "\n".join(part for part in (article.title, article.body or article.summary or "") if part)
+    return "\n".join(
+        part for part in (article.title, article.body or article.summary or "") if part
+    )
 
 
 async def record_readings(
@@ -120,7 +127,9 @@ async def record_readings(
     # When the status changed in the world: the publisher's time, but never
     # later than when we saw it, and never trusted to make it earlier than the
     # cutoff can see (observed_at still gates every read).
-    event_time = min(ensure_utc(published, field="published_at"), observed) if published else observed
+    event_time = (
+        min(ensure_utc(published, field="published_at"), observed) if published else observed
+    )
     for reading in readings:
         game: Game | None = None
         until: datetime | None = None
@@ -186,9 +195,7 @@ async def extract_articles(
     return readings, ruled_out
 
 
-async def unread_articles(
-    session: AsyncSession, *, now: datetime, days: int
-) -> list[NewsArticle]:
+async def unread_articles(session: AsyncSession, *, now: datetime, days: int) -> list[NewsArticle]:
     """Recent articles with no readings from the current extractor version.
 
     Lets improved rules be re-run over the last few weeks. Articles that simply

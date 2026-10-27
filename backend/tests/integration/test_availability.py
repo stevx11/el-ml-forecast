@@ -32,8 +32,8 @@ from euroleague_ai.ml.availability import (
 )
 from euroleague_ai.ml.dataset import load_training_rows
 from euroleague_ai.ml.inference import LoadedModel, predict_game
-from euroleague_ai.ml.outcomes import availability_report, score_predictions
 from euroleague_ai.ml.matrix import features_to_matrix
+from euroleague_ai.ml.outcomes import availability_report, score_predictions
 from euroleague_ai.models.enums import EntityType, PredictionTarget
 from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats
 from euroleague_ai.models.identity import ExternalRef
@@ -74,9 +74,7 @@ async def _line_filter(session: AsyncSession, game_code: int, player_code: str) 
             select(GameTeam.id).where(GameTeam.game_id == game.id, GameTeam.team_id == team_id)
         )
     ).scalar_one()
-    return (PlayerGameStats.game_team_id == game_team_id) & (
-        PlayerGameStats.player_id == player_id
-    )
+    return (PlayerGameStats.game_team_id == game_team_id) & (PlayerGameStats.player_id == player_id)
 
 
 async def _seed_absences(
@@ -160,9 +158,7 @@ class TestDataset:
         """The reason the backfill change exists: a box-score-only backfill has
         no snapshot for an injured player, so the zero can never be learned."""
         await _seed_absences(session, fixture_provider, season)
-        await backfill_snapshots(
-            session, clock=CLOCK, settings=settings, include_candidates=False
-        )
+        await backfill_snapshots(session, clock=CLOCK, settings=settings, include_candidates=False)
         _, diagnostics = await load_availability_rows(session, settings=settings)
         assert diagnostics.missing_snapshots == 1
 

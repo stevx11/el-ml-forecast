@@ -183,4 +183,4 @@ async def last_appearances(
             .group_by(PlayerGameStats.player_id)
         )
     ).all()
-    return {player_id: tip_off for player_id, tip_off in rows}
+    return dict(rows)

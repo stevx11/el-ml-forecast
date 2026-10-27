@@ -136,9 +136,7 @@ class Fold:
     test: list[TrainingRow] = field(default_factory=list)
 
 
-def walk_forward_folds(
-    rows: Sequence[TrainingRow], *, min_train_rounds: int = 5
-) -> list[Fold]:
+def walk_forward_folds(rows: Sequence[TrainingRow], *, min_train_rounds: int = 5) -> list[Fold]:
     """Split chronologically: train on rounds ``1..k``, test on ``k+1``.
 
     **Never a random split.** Randomly partitioning player-games puts the same
@@ -197,7 +195,10 @@ def backtest(
     """
     folds = walk_forward_folds(rows, min_train_rounds=min_train_rounds)
     if not folds:
-        return {"folds": 0, "overall": Metrics(0, math.nan, math.nan, math.nan, math.nan, 0.0).as_dict()}
+        return {
+            "folds": 0,
+            "overall": Metrics(0, math.nan, math.nan, math.nan, math.nan, 0.0).as_dict(),
+        }
 
     test_rows: list[TrainingRow] = []
     predictions: list[float | None] = []
@@ -239,6 +240,4 @@ def compare(results: dict[str, dict[str, Any]]) -> list[dict[str, Any]]:
         }
         for name, result in results.items()
     ]
-    return sorted(
-        table, key=lambda entry: (math.isnan(entry["mae"]), entry["mae"])
-    )
+    return sorted(table, key=lambda entry: (math.isnan(entry["mae"]), entry["mae"]))

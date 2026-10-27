@@ -113,11 +113,7 @@ async def seasons(session: SessionDep) -> dict[str, Any]:
         .order_by(Season.start_year.desc())
     )
     rows = (await session.execute(stmt)).all()
-    return {
-        "seasons": [
-            {"code": code, "name": name, "games": games} for code, name, games in rows
-        ]
-    }
+    return {"seasons": [{"code": code, "name": name, "games": games} for code, name, games in rows]}
 
 
 @router.get("/board/status")
@@ -139,9 +135,7 @@ async def status(session: SessionDep) -> dict[str, Any]:
     ).scalar_one()
 
     predictions = (await session.execute(select(func.count(Prediction.id)))).scalar_one()
-    latest = (
-        await session.execute(select(func.max(Prediction.prediction_timestamp)))
-    ).scalar_one()
+    latest = (await session.execute(select(func.max(Prediction.prediction_timestamp)))).scalar_one()
 
     models = (
         await session.execute(
@@ -172,8 +166,6 @@ async def accuracy(
     """Realised accuracy and calibration, once fixtures have been played."""
     from euroleague_ai.ml.outcomes import accuracy_report, unscored_games
 
-    report = await accuracy_report(
-        session, season_code=season, include_absent=include_absent
-    )
+    report = await accuracy_report(session, season_code=season, include_absent=include_absent)
     report["unscored_games"] = await unscored_games(session, season_code=season)
     return report

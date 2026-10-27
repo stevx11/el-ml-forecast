@@ -79,7 +79,10 @@ async def _collect(session: AsyncSession, settings: Settings) -> object:
 
 class TestCollection:
     async def test_articles_and_readings_are_stored_with_fetch_time(
-        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef,
+        self,
+        session: AsyncSession,
+        fixture_provider: FixtureProvider,
+        season: SeasonRef,
         settings: Settings,
     ) -> None:
         await _world(session, fixture_provider, season)
@@ -105,7 +108,10 @@ class TestCollection:
         assert scopes["open"]["game_code"] is None
 
     async def test_a_second_run_stores_nothing_new(
-        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef,
+        self,
+        session: AsyncSession,
+        fixture_provider: FixtureProvider,
+        season: SeasonRef,
         settings: Settings,
     ) -> None:
         await _world(session, fixture_provider, season)
@@ -117,7 +123,10 @@ class TestCollection:
 
 class TestReread:
     async def test_replace_drops_old_readings_instead_of_adding_to_them(
-        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef,
+        self,
+        session: AsyncSession,
+        fixture_provider: FixtureProvider,
+        season: SeasonRef,
         settings: Settings,
     ) -> None:
         await _world(session, fixture_provider, season)
@@ -135,13 +144,21 @@ class TestReread:
 
 class TestPredictions:
     async def test_confident_news_rules_out_and_vague_news_only_flags(
-        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef,
+        self,
+        session: AsyncSession,
+        fixture_provider: FixtureProvider,
+        season: SeasonRef,
         settings: Settings,
     ) -> None:
         await _world(session, fixture_provider, season)
         await _collect(session, settings)
-        await predict_game(session, await _game(session, 5), await _models(session),
-                           clock=INGEST, settings=settings)
+        await predict_game(
+            session,
+            await _game(session, 5),
+            await _models(session),
+            clock=INGEST,
+            settings=settings,
+        )
 
         plays = await _plays(session, 5)
         jovanovic, garcia = plays["011002"], plays["012001"]

@@ -54,7 +54,9 @@ async def _models(session: AsyncSession, settings: Settings) -> dict[PredictionT
     }
 
 
-async def _minutes_by_side(session: AsyncSession, game_id: uuid.UUID) -> list[tuple[float, float | None]]:
+async def _minutes_by_side(
+    session: AsyncSession, game_id: uuid.UUID
+) -> list[tuple[float, float | None]]:
     return [
         (median, expected)
         for median, expected in (
@@ -105,11 +107,16 @@ class TestApplied:
         await _seed_absences(session, fixture_provider, season)
         models = await _models(session, settings)
         stale = MinutesReconciliation(
-            alpha=1.0, target_minutes=60.0, cap=40.0,
-            minutes_model_id=str(uuid.uuid4()), plays_model_id=str(uuid.uuid4()),
+            alpha=1.0,
+            target_minutes=60.0,
+            cap=40.0,
+            minutes_model_id=str(uuid.uuid4()),
+            plays_model_id=str(uuid.uuid4()),
         )
         game = await _game(session, 6)
-        await predict_game(session, game, models, clock=CLOCK, settings=settings, reconciliation=stale)
+        await predict_game(
+            session, game, models, clock=CLOCK, settings=settings, reconciliation=stale
+        )
         assert all(e is None for _, e in await _minutes_by_side(session, game.id))
 
 

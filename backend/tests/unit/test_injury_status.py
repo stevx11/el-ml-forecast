@@ -47,13 +47,24 @@ def _report(
 
 class TestResolve:
     def test_a_report_for_this_game_applies(self) -> None:
-        resolved = resolve_status([_report(AvailabilityStatus.OUT, days_before=1, game=GAME)],
-                                  game_id=GAME, tip_off=TIP, last_played=None)
+        resolved = resolve_status(
+            [_report(AvailabilityStatus.OUT, days_before=1, game=GAME)],
+            game_id=GAME,
+            tip_off=TIP,
+            last_played=None,
+        )
         assert resolved is not None and resolved.rules_out and resolved.scope == "game"
 
     def test_a_report_for_another_game_does_not(self) -> None:
-        assert resolve_status([_report(AvailabilityStatus.OUT, days_before=1, game=OTHER_GAME)],
-                              game_id=GAME, tip_off=TIP, last_played=None) is None
+        assert (
+            resolve_status(
+                [_report(AvailabilityStatus.OUT, days_before=1, game=OTHER_GAME)],
+                game_id=GAME,
+                tip_off=TIP,
+                last_played=None,
+            )
+            is None
+        )
 
     def test_until_applies_before_the_date_only(self) -> None:
         later = _report(AvailabilityStatus.OUT, days_before=5, until=TIP + timedelta(days=7))
@@ -63,15 +74,19 @@ class TestResolve:
 
     def test_open_ended_is_retired_once_he_plays_again(self) -> None:
         out = _report(AvailabilityStatus.OUT, days_before=10)
-        still_out = resolve_status([out], game_id=GAME, tip_off=TIP, last_played=TIP - timedelta(days=12))
+        still_out = resolve_status(
+            [out], game_id=GAME, tip_off=TIP, last_played=TIP - timedelta(days=12)
+        )
         back = resolve_status([out], game_id=GAME, tip_off=TIP, last_played=TIP - timedelta(days=3))
         assert still_out is not None and still_out.scope == "open"
         assert back is None
 
     def test_a_game_report_is_not_retired_by_earlier_appearances(self) -> None:
         out = _report(AvailabilityStatus.OUT, days_before=1, game=GAME)
-        assert resolve_status([out], game_id=GAME, tip_off=TIP,
-                              last_played=TIP - timedelta(hours=2)) is not None
+        assert (
+            resolve_status([out], game_id=GAME, tip_off=TIP, last_played=TIP - timedelta(hours=2))
+            is not None
+        )
 
     def test_newest_wins_and_available_clears(self) -> None:
         out = _report(AvailabilityStatus.OUT, days_before=4)
@@ -83,14 +98,20 @@ class TestResolve:
         assert resolve_status([out, gtd, fit], game_id=GAME, tip_off=TIP, last_played=None) is None
 
     def test_suspension_rules_out(self) -> None:
-        resolved = resolve_status([_report(AvailabilityStatus.SUSPENDED, days_before=1, game=GAME)],
-                                  game_id=GAME, tip_off=TIP, last_played=None)
+        resolved = resolve_status(
+            [_report(AvailabilityStatus.SUSPENDED, days_before=1, game=GAME)],
+            game_id=GAME,
+            tip_off=TIP,
+            last_played=None,
+        )
         assert resolved is not None and resolved.rules_out
 
     def test_as_dict_is_json_ready(self) -> None:
         resolved = resolve_status(
             [_report(AvailabilityStatus.OUT, days_before=3, until=TIP + timedelta(days=10))],
-            game_id=GAME, tip_off=TIP, last_played=None,
+            game_id=GAME,
+            tip_off=TIP,
+            last_played=None,
         )
         assert resolved is not None
         info = resolved.as_dict()
@@ -101,9 +122,14 @@ class TestResolve:
 class TestStatusWords:
     @pytest.mark.parametrize(
         ("word", "status"),
-        [("out", AvailabilityStatus.OUT), ("GTD", AvailabilityStatus.QUESTIONABLE),
-         ("game time", AvailabilityStatus.QUESTIONABLE), ("back", AvailabilityStatus.AVAILABLE),
-         ("Suspended", AvailabilityStatus.SUSPENDED), ("day_to_day", AvailabilityStatus.QUESTIONABLE)],
+        [
+            ("out", AvailabilityStatus.OUT),
+            ("GTD", AvailabilityStatus.QUESTIONABLE),
+            ("game time", AvailabilityStatus.QUESTIONABLE),
+            ("back", AvailabilityStatus.AVAILABLE),
+            ("Suspended", AvailabilityStatus.SUSPENDED),
+            ("day_to_day", AvailabilityStatus.QUESTIONABLE),
+        ],
     )
     def test_aliases(self, word: str, status: AvailabilityStatus) -> None:
         assert parse_status(word) is status
@@ -177,7 +203,9 @@ class TestKeepAvailable:
     def test_ready_is_returned_only_when_asked(self) -> None:
         ready = _report(AvailabilityStatus.AVAILABLE, days_before=1, game=GAME)
         assert resolve_status([ready], game_id=GAME, tip_off=TIP, last_played=None) is None
-        kept = resolve_status([ready], game_id=GAME, tip_off=TIP, last_played=None, keep_available=True)
+        kept = resolve_status(
+            [ready], game_id=GAME, tip_off=TIP, last_played=None, keep_available=True
+        )
         assert kept is not None and kept.report.status is AvailabilityStatus.AVAILABLE
 
 
@@ -185,11 +213,17 @@ class TestTableConfirmation:
     """The injury table writes only changes, so its rows carry the time of the
     last fetch that repeated them. News only wins if it is newer than that."""
 
-    def _table(self, status: AvailabilityStatus, *, days_before: float, confirmed_days_before: float | None) -> StatusReport:
+    def _table(
+        self, status: AvailabilityStatus, *, days_before: float, confirmed_days_before: float | None
+    ) -> StatusReport:
         report = replace(
             _report(status, days_before=days_before, game=GAME), source=StatusSourceType.REPORT
         )
-        confirmed = TIP - timedelta(days=confirmed_days_before) if confirmed_days_before is not None else None
+        confirmed = (
+            TIP - timedelta(days=confirmed_days_before)
+            if confirmed_days_before is not None
+            else None
+        )
         return replace(report, confirmed_at=confirmed)
 
     def test_a_reconfirmed_table_row_beats_an_older_news_reading(self) -> None:

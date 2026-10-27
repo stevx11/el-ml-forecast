@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
@@ -88,9 +88,7 @@ class TestDatetimes:
         assert parsed == datetime(2025, 9, 16, 6, 35, 18, 346000, tzinfo=UTC)
 
     def test_trailing_z(self) -> None:
-        assert parse_datetime("2025-10-01T18:00:00Z") == datetime(
-            2025, 10, 1, 18, 0, tzinfo=UTC
-        )
+        assert parse_datetime("2025-10-01T18:00:00Z") == datetime(2025, 10, 1, 18, 0, tzinfo=UTC)
 
     def test_unparseable_returns_none(self) -> None:
         """One bad timestamp must cost one row, not the whole backfill."""
@@ -102,7 +100,7 @@ class TestDatetimes:
         assert assume_utc(assume_utc(aware)) == aware
 
     def test_date_from_timestamp(self) -> None:
-        assert parse_date("1992-02-23T00:00:00") == datetime(1992, 2, 23).date()
+        assert parse_date("1992-02-23T00:00:00") == date(1992, 2, 23)
 
 
 class TestNumbers:

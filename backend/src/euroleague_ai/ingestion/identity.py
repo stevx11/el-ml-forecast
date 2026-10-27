@@ -66,9 +66,7 @@ class IdentityResolver:
             self._cache[key] = internal_id
         return internal_id
 
-    async def resolve(
-        self, entity_type: EntityType, external_id: str
-    ) -> tuple[uuid.UUID, bool]:
+    async def resolve(self, entity_type: EntityType, external_id: str) -> tuple[uuid.UUID, bool]:
         """Return ``(internal_id, is_new)``, registering the reference if unseen.
 
         ``ON CONFLICT DO NOTHING`` plus a re-select handles the race where two
@@ -89,9 +87,7 @@ class IdentityResolver:
                 internal_id=new_id,
                 observed_at=self._clock.now(),
             )
-            .on_conflict_do_nothing(
-                index_elements=["provider_key", "entity_type", "external_id"]
-            )
+            .on_conflict_do_nothing(index_elements=["provider_key", "entity_type", "external_id"])
             .returning(ExternalRef.internal_id)
         )
         returned = (await self._session.execute(stmt)).scalar_one_or_none()
@@ -100,9 +96,7 @@ class IdentityResolver:
             # Another writer won the race; adopt their id.
             winner = await self.lookup(entity_type, external_id)
             if winner is None:  # pragma: no cover - defensive
-                raise RuntimeError(
-                    f"could not resolve {entity_type}:{external_id} after conflict"
-                )
+                raise RuntimeError(f"could not resolve {entity_type}:{external_id} after conflict")
             return winner, False
 
         self._cache[(entity_type, external_id)] = returned

@@ -107,9 +107,7 @@ def summarise_squad(
     last_game = by_game[last_game_id]
     played_last = {a.player_id for a in last_game if a.played}
 
-    rotation_sizes = [
-        sum(1 for a in by_game[game_id] if a.played) for game_id in order
-    ]
+    rotation_sizes = [sum(1 for a in by_game[game_id] if a.played) for game_id in order]
 
     absent = {pid: minutes for pid, minutes in rotation.items() if pid not in played_last}
     top_teammate = max(rotation, key=lambda pid: rotation[pid], default=None)
@@ -130,15 +128,11 @@ def summarise_squad(
         "teammate_minutes_absent_share": _round(
             sum(absent.values()) / sum(rotation.values()) if rotation else None
         ),
-        "top_teammate_absent": (
-            None if top_teammate is None else float(top_teammate in absent)
-        ),
+        "top_teammate_absent": (None if top_teammate is None else float(top_teammate in absent)),
         # The player's own recent participation. A player returning from an
         # absence is usually eased back in, which suppresses minutes.
         "player_played_last_game": float(player_played_last),
-        "player_missed_recent_games": float(
-            sum(1 for a in player_appearances if not a.played)
-        ),
+        "player_missed_recent_games": float(sum(1 for a in player_appearances if not a.played)),
     }
 
 

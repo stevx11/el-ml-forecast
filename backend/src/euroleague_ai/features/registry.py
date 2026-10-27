@@ -196,17 +196,13 @@ async def build_player_features(
                 team_id, as_of=as_of, games=COMPETITION_WINDOW, season_id=season_id
             )
         )
-        positions = await teams.squad_positions(
-            team_id, as_of=as_of, season_id=season_id
-        )
+        positions = await teams.squad_positions(team_id, as_of=as_of, season_id=season_id)
         if cache is not None:
             cache[squad_key] = (appearances, competition, positions)
 
     features.update(summarise_squad(appearances, player_id=player_id))
     features.update(
-        summarise_position(
-            player_id=player_id, positions=positions, appearances=competition
-        )
+        summarise_position(player_id=player_id, positions=positions, appearances=competition)
     )
 
     features.update(

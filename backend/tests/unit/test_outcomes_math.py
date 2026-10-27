@@ -7,6 +7,8 @@ at each edge that would quietly misfile every probability.
 
 from __future__ import annotations
 
+import itertools
+
 import pytest
 
 from euroleague_ai.ml.dataset import TARGET_COLUMNS, target_value
@@ -32,12 +34,7 @@ class TestProbabilityBands:
         """No gaps, no overlaps, covering exactly [0, 1]."""
         assert PROBABILITY_BANDS[0][0] == 0.0
         assert PROBABILITY_BANDS[-1][1] == 1.0
-        # [:-1] against [1:]: pairing consecutive bands means dropping the last
-        # from the left side, or strict=True rightly objects that the two
-        # sequences differ in length.
-        for (_, previous_high), (next_low, _) in zip(
-            PROBABILITY_BANDS[:-1], PROBABILITY_BANDS[1:], strict=True
-        ):
+        for (_, previous_high), (next_low, _) in itertools.pairwise(PROBABILITY_BANDS):
             assert previous_high == next_low
 
     @pytest.mark.parametrize(
@@ -52,9 +49,7 @@ class TestProbabilityBands:
             (1.0, "90-100%"),  # the only upper-inclusive edge
         ],
     )
-    def test_edges_land_in_the_intended_band(
-        self, probability: float, expected: str
-    ) -> None:
+    def test_edges_land_in_the_intended_band(self, probability: float, expected: str) -> None:
         assert band_for(probability) == expected
 
     def test_every_probability_finds_a_band(self) -> None:

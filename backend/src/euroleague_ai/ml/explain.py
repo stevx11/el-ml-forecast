@@ -200,18 +200,14 @@ def theme_for(feature_name: str) -> str:
     return "other"
 
 
-def phrase_for(
-    theme: str, impact: float, phrases: dict[str, tuple[str, str]] | None = None
-) -> str:
+def phrase_for(theme: str, impact: float, phrases: dict[str, tuple[str, str]] | None = None) -> str:
     """Readable label for a signed theme contribution."""
     table = phrases or _PHRASES
     positive, negative = table.get(theme, table.get("other", _PHRASES["other"]))
     return positive if impact >= 0 else negative
 
 
-def theme_totals(
-    feature_names: list[str], contributions: list[float]
-) -> dict[str, float]:
+def theme_totals(feature_names: list[str], contributions: list[float]) -> dict[str, float]:
     """Sum SHAP contributions per theme.
 
     Valid because SHAP values are additive: the sum over a group is exactly that
@@ -300,6 +296,5 @@ def render_drivers(explanation: dict[str, Any] | None) -> str:
     if not explanation:
         return ""
     return ", ".join(
-        f"{driver['direction']} {driver['label']}"
-        for driver in explanation.get("drivers", [])
+        f"{driver['direction']} {driver['label']}" for driver in explanation.get("drivers", [])
     )

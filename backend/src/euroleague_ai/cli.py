@@ -13,8 +13,8 @@ to Celery tasks later is a decorator, not a rewrite.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
-from typing import Annotated, Any, TypeVar
+from collections.abc import Callable, Coroutine
+from typing import TYPE_CHECKING, Annotated, Any
 
 import typer
 
@@ -29,6 +29,11 @@ from euroleague_ai.ingestion.jobs import (
     ingest_teams,
 )
 from euroleague_ai.providers.factory import build_provider, season_ref
+
+if TYPE_CHECKING:  # pragma: no cover - typing only
+    from euroleague_ai.ingestion.injuries import RosterPlayer
+    from euroleague_ai.quality.checks import QualityReport
+    from euroleague_ai.repositories.availability import StatusReport
 
 logger = get_logger(__name__)
 
@@ -53,18 +58,14 @@ app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(pipeline_app, name="pipeline")
 app.add_typer(injuries_app, name="injuries")
 
-T = TypeVar("T")
-
-SeasonOption = Annotated[
-    str, typer.Option("--season", "-s", help="Season code, e.g. E2025.")
-]
+SeasonOption = Annotated[str, typer.Option("--season", "-s", help="Season code, e.g. E2025.")]
 
 
 def _season_default() -> str:
     return get_settings().euroleague_default_season
 
 
-def _run(factory: Callable[[], Awaitable[T]]) -> T:
+def _run[T](factory: Callable[[], Coroutine[Any, Any, T]]) -> T:
     """Run an async job with logging configured and the provider always closed."""
     settings = get_settings()
     configure_logging(level=settings.log_level, fmt=settings.log_format)
@@ -226,9 +227,7 @@ def cmd_ingest_all(
 def cmd_ingest_seasons(
     start: Annotated[int, typer.Option("--from", help="First season start year.")] = 2016,
     end: Annotated[int, typer.Option("--to", help="Last season start year.")] = 2025,
-    wait: Annotated[
-        bool, typer.Option("--wait", help="Sit through rate-limit cooldowns.")
-    ] = True,
+    wait: Annotated[bool, typer.Option("--wait", help="Sit through rate-limit cooldowns.")] = True,
 ) -> None:
     """Backfill a range of seasons, newest first.
 
@@ -253,11 +252,9 @@ def cmd_ingest_seasons(
                 typer.echo(f"--- {code} ---")
                 try:
                     async with session_scope() as session:
-                        result = await ingest_all(
-                            session, provider, season_ref(code, settings)
-                        )
+                        result = await ingest_all(session, provider, season_ref(code, settings))
                     summary[code] = f"{result.rows_written} rows"
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     # One bad season must not abandon the rest of the range.
                     logger.exception("season failed", extra={"season": code})
                     summary[code] = f"FAILED: {type(exc).__name__}"
@@ -335,7 +332,7 @@ def cmd_feature_names() -> None:
     """Print the feature vector's column names and count."""
     from euroleague_ai.features.registry import FEATURE_SET_VERSION, feature_names
 
-    async def job() -> object:
+    async def job() -> list[str]:
         async with session_scope() as session:
             return await feature_names(session)
 
@@ -360,7 +357,7 @@ def cmd_build_features(
     from sqlalchemy import select
 
     from euroleague_ai.features.snapshot import build_and_store_player_snapshot
-    from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats  # noqa: F401
+    from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats
 
     async def job() -> object:
         settings = get_settings()
@@ -419,13 +416,13 @@ def cmd_collect_news() -> None:
         )
         raise typer.Exit(code=1)
 
-    async def job() -> object:
+    async def job() -> dict[str, Any]:
         async with session_scope() as session:
             result = await collect_news(session, settings=settings, now=SystemClock().now())
             await session.commit()
             return result.as_dict()
 
-    r: dict[str, Any] = _run(job)  # type: ignore[assignment]
+    r = _run(job)
     for url, count in r["feeds"].items():
         failed = url in r["failed_feeds"]
         typer.secho(
@@ -433,7 +430,8 @@ def cmd_collect_news() -> None:
             fg=typer.colors.RED if failed else None,
         )
     typer.echo(
-        f"  {r['readings']} injury reading(s), {r['ruled_out']} confident enough to rule a player out"
+        f"  {r['readings']} injury reading(s), {r['ruled_out']} confident enough to rule a player "
+        "out"
     )
     if r["readings"]:
         typer.echo("  see them with: euroleague-ai news injuries")
@@ -441,12 +439,16 @@ def cmd_collect_news() -> None:
 
 @news_app.command("extract")
 def cmd_news_extract(
-    days: Annotated[int, typer.Option("--days", help="Re-read articles from the last N days.")] = 14,
+    days: Annotated[
+        int, typer.Option("--days", help="Re-read articles from the last N days.")
+    ] = 14,
     replace: Annotated[
         bool,
         typer.Option(
             "--replace",
-            help="Re-read every article in the window and drop the readings taken from them before.",
+            help=(
+                "Re-read every article in the window and drop the readings taken from them before."
+            ),
         ),
     ] = False,
 ) -> None:
@@ -458,7 +460,7 @@ def cmd_news_extract(
     from euroleague_ai.core.clock import SystemClock
     from euroleague_ai.news.pipeline import extract_articles, reread_articles, unread_articles
 
-    async def job() -> object:
+    async def job() -> tuple[int, int, int]:
         now = SystemClock().now()
         async with session_scope() as session:
             if replace:
@@ -469,8 +471,10 @@ def cmd_news_extract(
             await session.commit()
             return result
 
-    count, readings, ruled_out = _run(job)  # type: ignore[misc]
-    typer.echo(f"  read {count} article(s): {readings} injury reading(s), {ruled_out} ruling a player out")
+    count, readings, ruled_out = _run(job)
+    typer.echo(
+        f"  read {count} article(s): {readings} injury reading(s), {ruled_out} ruling a player out"
+    )
 
 
 @news_app.command("injuries")
@@ -524,11 +528,11 @@ def cmd_news_injuries(
             scope = f"until {payload['until'][5:]}"
         typer.secho(
             f"  {published}  {team_code or '?':<4} {name:<26} "
-            f"{str(status):<13} {float(event.confidence):.2f}  {scope:<12}"
+            f"{status!s:<13} {float(event.confidence):.2f}  {scope:<12}"
             + ("  rules out" if applies else ""),
             fg=typer.colors.RED if applies else None,
         )
-        typer.echo(f"      \"{event.payload.get('sentence', '')[:150]}\"")
+        typer.echo(f'      "{event.payload.get("sentence", "")[:150]}"')
         typer.echo(f"      {title[:90]}")
 
 
@@ -553,22 +557,42 @@ def _print_report(recorded: Any) -> None:
     reason = f"  ({recorded.reason})" if recorded.reason else ""
     typer.echo(
         f"  {recorded.player.team_code:<4} {recorded.player.full_name:<28} "
-        f"{str(recorded.status):<13} {scope}{reason}"
+        f"{recorded.status!s:<13} {scope}{reason}"
     )
 
 
 @injuries_app.command("set")
 def cmd_injuries_set(
-    player: Annotated[str, typer.Argument(help='Name or player code, e.g. "Petrovic" or "Marko Petrovic".')],
+    player: Annotated[
+        str, typer.Argument(help='Name or player code, e.g. "Petrovic" or "Marko Petrovic".')
+    ],
     status: Annotated[
         str,
-        typer.Argument(help="out, suspended, doubtful, questionable (gtd), probable, available (back)."),
+        typer.Argument(
+            help="out, suspended, doubtful, questionable (gtd), probable, available (back)."
+        ),
     ],
-    team: Annotated[str | None, typer.Option("--team", "-t", help="Club code, to pick between players with one name.")] = None,
-    reason: Annotated[str | None, typer.Option("--reason", "-r", help='e.g. "knee", "illness".')] = None,
-    until: Annotated[str | None, typer.Option("--until", help="Out until this date (YYYY-MM-DD), for every game before it.")] = None,
-    indefinite: Annotated[bool, typer.Option("--indefinite", help="No return date: applies until he plays again or is set back.")] = False,
-    game_code: Annotated[int | None, typer.Option("--game-code", "-g", help="Only this fixture. Default: his team's next game.")] = None,
+    team: Annotated[
+        str | None,
+        typer.Option("--team", "-t", help="Club code, to pick between players with one name."),
+    ] = None,
+    reason: Annotated[
+        str | None, typer.Option("--reason", "-r", help='e.g. "knee", "illness".')
+    ] = None,
+    until: Annotated[
+        str | None,
+        typer.Option("--until", help="Out until this date (YYYY-MM-DD), for every game before it."),
+    ] = None,
+    indefinite: Annotated[
+        bool,
+        typer.Option(
+            "--indefinite", help="No return date: applies until he plays again or is set back."
+        ),
+    ] = False,
+    game_code: Annotated[
+        int | None,
+        typer.Option("--game-code", "-g", help="Only this fixture. Default: his team's next game."),
+    ] = None,
     season: SeasonOption = "",
 ) -> None:
     """Record one player's status, stamped with the time you entered it.
@@ -657,7 +681,9 @@ def cmd_injuries_report(
         str | None,
         typer.Option("--file", "-f", help="Read a saved copy of the page instead of fetching it."),
     ] = None,
-    show: Annotated[bool, typer.Option("--unmatched", help="List rows with no rostered player.")] = False,
+    show: Annotated[
+        bool, typer.Option("--unmatched", help="List rows with no rostered player.")
+    ] = False,
 ) -> None:
     """Read the daily injury table (INJURY_REPORT_URL) and record what changed.
 
@@ -677,8 +703,10 @@ def cmd_injuries_report(
     settings = get_settings()
     url = settings.injury_report_url
     if not url and not file:
-        typer.secho("  INJURY_REPORT_URL is not set (see .env.example), and no --file given.",
-                    fg=typer.colors.RED)
+        typer.secho(
+            "  INJURY_REPORT_URL is not set (see .env.example), and no --file given.",
+            fg=typer.colors.RED,
+        )
         raise typer.Exit(code=1)
 
     async def job() -> object:
@@ -689,7 +717,10 @@ def cmd_injuries_report(
         )
         async with session_scope() as session:
             imported = await import_injury_report(
-                session, page, url=url or "https://basketnews.com/injury-report", now=SystemClock().now()
+                session,
+                page,
+                url=url or "https://basketnews.com/injury-report",
+                now=SystemClock().now(),
             )
             await session.commit()
             return imported
@@ -727,9 +758,13 @@ def cmd_injuries_check(
     round_number: Annotated[
         int | None, typer.Option("--round", "-r", help="Check one round of the season.")
     ] = None,
-    days: Annotated[int, typer.Option("--days", help="Otherwise, finished games in the last N days.")] = 7,
+    days: Annotated[
+        int, typer.Option("--days", help="Otherwise, finished games in the last N days.")
+    ] = 7,
     season: SeasonOption = "",
-    show_all: Annotated[bool, typer.Option("--all", help="List every player, not only mismatches.")] = False,
+    show_all: Annotated[
+        bool, typer.Option("--all", help="List every player, not only mismatches.")
+    ] = False,
 ) -> None:
     """After a round: did the statuses the predictions used hold up?
 
@@ -777,13 +812,16 @@ def cmd_injuries_check(
         for p in listed:
             played = f"{p.minutes:.0f} min" if p.played else ("DNP" if p.dressed else "not dressed")
             typer.secho(
-                f"    game {p.game_code:<5}{p.team:<5}{p.player:<28}{p.group:<26}{p.source.lower():<8}"
+                "    game "
+                f"{p.game_code:<5}{p.team:<5}{p.player:<28}{p.group:<26}{p.source.lower():<8}"
                 f"{played:<12}{(p.reason or '')[:60]}",
                 fg=typer.colors.RED if p.mismatch else None,
             )
     elif not show_all:
-        typer.secho("  no mismatches: every ruled-out player sat, every ready player played",
-                    fg=typer.colors.GREEN)
+        typer.secho(
+            "  no mismatches: every ruled-out player sat, every ready player played",
+            fg=typer.colors.GREEN,
+        )
 
 
 @injuries_app.command("list")
@@ -811,15 +849,22 @@ def cmd_injuries_list() -> None:
                 if game is None:
                     continue
                 resolved = resolve_status(
-                    items, game_id=game.id, tip_off=game.tip_off_utc, last_played=played.get(player_id)
+                    items,
+                    game_id=game.id,
+                    tip_off=game.tip_off_utc,
+                    last_played=played.get(player_id),
                 )
                 if resolved is not None:
-                    rows.append((member.team_code, member.full_name, game.game_code, resolved.as_dict()))
+                    rows.append(
+                        (member.team_code, member.full_name, game.game_code, resolved.as_dict())
+                    )
             return sorted(rows, key=lambda r: (r[0], r[1]))
 
     rows = _run(job)
     if not rows:
-        typer.echo("  no reports apply to upcoming games. Add one with `euroleague-ai injuries set`.")
+        typer.echo(
+            "  no reports apply to upcoming games. Add one with `euroleague-ai injuries set`."
+        )
         return
     typer.echo("")
     typer.echo(
@@ -827,7 +872,9 @@ def cmd_injuries_list() -> None:
         f"{'source':<12}{'applied':<9}reason"
     )
     for team_code, name, code, info in rows:  # type: ignore[attr-defined]
-        scope = {"game": "this game", "until": f"to {info['until']}", "open": "until back"}[info["scope"]]
+        scope = {"game": "this game", "until": f"to {info['until']}", "open": "until back"}[
+            info["scope"]
+        ]
         source = info["source"].lower()
         if info.get("confidence") is not None:
             source += f" {float(info['confidence']):.2f}"
@@ -848,15 +895,17 @@ def cmd_injuries_history(
     from euroleague_ai.ingestion.injuries import InjuryInputError, current_rosters, match_player
     from euroleague_ai.repositories.availability import status_reports
 
-    async def job() -> object:
+    async def job() -> tuple[RosterPlayer, list[StatusReport]]:
         now = SystemClock().now()
         async with session_scope() as session:
             match = match_player(await current_rosters(session, as_of=now), player, team_code=team)
-            reports = (await status_reports(session, [match.player_id], as_of=now)).get(match.player_id, [])
+            reports = (await status_reports(session, [match.player_id], as_of=now)).get(
+                match.player_id, []
+            )
             return match, reports
 
     try:
-        match, reports = _run(job)  # type: ignore[misc]
+        match, reports = _run(job)
     except InjuryInputError as exc:
         typer.secho(f"  {exc}", fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
@@ -864,9 +913,14 @@ def cmd_injuries_history(
     if not reports:
         typer.echo("  no reports recorded")
     for r in reports:
-        scope = "one game" if r.game_id else (f"until {r.expected_return.date()}" if r.expected_return else "until back")
+        scope = (
+            "one game"
+            if r.game_id
+            else (f"until {r.expected_return.date()}" if r.expected_return else "until back")
+        )
         typer.echo(
-            f"  {r.observed_at:%Y-%m-%d %H:%M}  {str(r.status):<13} {scope:<18} {str(r.source):<8} {r.reason or ''}"
+            f"  {r.observed_at:%Y-%m-%d %H:%M}  {r.status!s:<13} {scope:<18} {r.source!s:<8} "
+            f"{r.reason or ''}"
         )
 
 
@@ -891,7 +945,7 @@ def cmd_quality_check() -> None:
     """
     from euroleague_ai.quality.checks import Severity, run_quality_checks
 
-    async def job() -> object:
+    async def job() -> QualityReport:
         async with session_scope() as session:
             return await run_quality_checks(session)
 
@@ -923,7 +977,7 @@ def cmd_quality_check() -> None:
         raise typer.Exit(code=1)
 
 
-def _print_pipeline(result: dict[str, object]) -> None:
+def _print_pipeline(result: dict[str, Any]) -> None:
     """Render one pipeline run."""
     if result.get("skipped"):
         typer.secho(
@@ -933,7 +987,7 @@ def _print_pipeline(result: dict[str, object]) -> None:
         return
 
     typer.echo("")
-    for step in result.get("steps") or []:  # type: ignore[union-attr]
+    for step in result.get("steps") or []:
         if step["ok"]:
             typer.secho(f"  OK    {step['name']}", fg=typer.colors.GREEN)
             for key, value in (step.get("detail") or {}).items():
@@ -977,7 +1031,7 @@ def cmd_pipeline_run(
 
     settings = get_settings()
 
-    async def job() -> object:
+    async def job() -> dict[str, Any]:
         async with session_scope() as session:
             result = await run_daily(
                 session,
@@ -988,8 +1042,8 @@ def cmd_pipeline_run(
             return result.as_dict()
 
     result = _run(job)
-    _print_pipeline(result)  # type: ignore[arg-type]
-    if not result.get("ok") and not result.get("skipped"):  # type: ignore[union-attr]
+    _print_pipeline(result)
+    if not result.get("ok") and not result.get("skipped"):
         raise typer.Exit(code=1)
 
 
@@ -1076,7 +1130,7 @@ def cmd_pipeline_history(
     """
     from euroleague_ai.scheduling.runner import recent_runs
 
-    async def job() -> object:
+    async def job() -> list[dict[str, Any]]:
         async with session_scope() as session:
             runs = await recent_runs(session, limit=limit)
             return [
@@ -1091,16 +1145,14 @@ def cmd_pipeline_history(
             ]
 
     runs = _run(job)
-    if not runs:  # type: ignore[truthy-bool]
+    if not runs:
         typer.echo("no scheduled runs yet - try `euroleague-ai pipeline run`")
         return
 
     typer.echo("")
     typer.echo(f"  {'started (UTC)':<20}{'status':<10}{'steps':<28}season")
-    for run in runs:  # type: ignore[union-attr]
-        marks = " ".join(
-            f"{s['name']}{'+' if s['ok'] else '!'}" for s in run["steps"]
-        )
+    for run in runs:
+        marks = " ".join(f"{s['name']}{'+' if s['ok'] else '!'}" for s in run["steps"])
         typer.secho(
             f"  {run['started']:<20}{run['status']:<10}{marks:<28}{run['season'] or ''}",
             fg=typer.colors.RED if run["status"] == "FAILED" else None,
@@ -1131,12 +1183,12 @@ def cmd_ml_baselines(
     Never a random split: that would put a player's adjacent games on both sides
     and measure interpolation rather than forecasting.
     """
-    from euroleague_ai.models.enums import PredictionTarget
     from euroleague_ai.ml.report import DEFAULT_TARGETS, run_baseline_report
+    from euroleague_ai.models.enums import PredictionTarget
 
     if target:
         try:
-            targets = (PredictionTarget[target.upper()],)
+            targets: tuple[PredictionTarget, ...] = (PredictionTarget[target.upper()],)
         except KeyError as exc:
             valid = ", ".join(t.name for t in PredictionTarget)
             raise typer.BadParameter(f"unknown target {target!r}. Valid: {valid}") from exc
@@ -1152,7 +1204,7 @@ def cmd_ml_baselines(
     if start is not None or end is not None:
         codes = [f"E{y}" for y in range((start or 2000), (end or 2025) + 1)]
 
-    async def job() -> object:
+    async def job() -> dict[str, Any]:
         async with session_scope() as session:
             return await run_baseline_report(
                 session,
@@ -1222,9 +1274,7 @@ def cmd_ml_baselines(
                 bold=True,
             )
         else:
-            typer.secho(
-                f"    bar to beat: {best} at MAE {bar:.3f}", fg=typer.colors.YELLOW
-            )
+            typer.secho(f"    bar to beat: {best} at MAE {bar:.3f}", fg=typer.colors.YELLOW)
 
     typer.echo("")
     typer.secho(
@@ -1240,10 +1290,10 @@ def cmd_ml_describe(
 ) -> None:
     """Summarise the training dataset for one target."""
     from euroleague_ai.features.registry import FEATURE_SET_VERSION
-    from euroleague_ai.models.enums import PredictionTarget
     from euroleague_ai.ml.dataset import describe_rows, load_training_rows
+    from euroleague_ai.models.enums import PredictionTarget
 
-    async def job() -> object:
+    async def job() -> dict[str, Any]:
         async with session_scope() as session:
             rows = await load_training_rows(
                 session,
@@ -1254,7 +1304,7 @@ def cmd_ml_describe(
 
     summary = _run(job)
     typer.echo("")
-    for key, value in summary.items():  # type: ignore[union-attr]
+    for key, value in summary.items():
         typer.echo(f"  {key:<16} {value}")
 
 
@@ -1275,13 +1325,13 @@ def cmd_repair_observed_at(
     """
     from euroleague_ai.ingestion.repair import repair_observed_at
 
-    async def job() -> object:
+    async def job() -> dict[str, Any]:
         async with session_scope() as session:
             return (await repair_observed_at(session, dry_run=dry_run)).as_dict()
 
     result = _run(job)
     typer.echo("")
-    for key, value in result.items():  # type: ignore[union-attr]
+    for key, value in result.items():
         typer.echo(f"  {key:<20} {value:,}")
     if dry_run:
         typer.secho("\n  dry run - nothing was modified", fg=typer.colors.YELLOW)
@@ -1310,9 +1360,7 @@ def cmd_purge_snapshots(
     from euroleague_ai.ingestion.repair import purge_feature_snapshots
 
     if not yes:
-        typer.confirm(
-            f"Delete feature snapshots ({version or 'all versions'})?", abort=True
-        )
+        typer.confirm(f"Delete feature snapshots ({version or 'all versions'})?", abort=True)
 
     async def job() -> object:
         async with session_scope() as session:
@@ -1327,9 +1375,7 @@ def cmd_ml_tune(
         str | None,
         typer.Option("--target", "-t", help="Single target. Default: all five."),
     ] = None,
-    trials: Annotated[
-        int, typer.Option("--trials", "-n", help="Configurations to sample.")
-    ] = 40,
+    trials: Annotated[int, typer.Option("--trials", "-n", help="Configurations to sample.")] = 40,
     start: Annotated[int | None, typer.Option("--from", help="First season start year.")] = None,
     end: Annotated[int | None, typer.Option("--to", help="Last season start year.")] = None,
     save: Annotated[
@@ -1361,7 +1407,7 @@ def cmd_ml_tune(
 
     if target:
         try:
-            targets = (PredictionTarget[target.upper()],)
+            targets: tuple[PredictionTarget, ...] = (PredictionTarget[target.upper()],)
         except KeyError as exc:
             valid = ", ".join(t.name for t in DEFAULT_TARGETS)
             raise typer.BadParameter(f"unknown target {target!r}. Valid: {valid}") from exc
@@ -1372,7 +1418,7 @@ def cmd_ml_tune(
     if start is not None or end is not None:
         codes = [f"E{y}" for y in range((start or 2000), (end or 2025) + 1)]
 
-    async def job() -> object:
+    async def job() -> list[dict[str, Any]]:
         out = []
         async with session_scope() as session:
             for item in targets:
@@ -1408,12 +1454,10 @@ def cmd_ml_tune(
     results = _run(job)
     typer.echo("")
     typer.secho(f"  Hyperparameter search - {trials} trials per target", bold=True)
-    typer.echo(
-        f"  {'target':<22}{'default':>9}{'tuned':>9}{'test gain':>11}   validation gain"
-    )
+    typer.echo(f"  {'target':<22}{'default':>9}{'tuned':>9}{'test gain':>11}   validation gain")
 
     improved = 0
-    for row in results:  # type: ignore[union-attr]
+    for row in results:
         if "error" in row:
             typer.secho(f"  {row['target']:<22}{row['error']}", fg=typer.colors.YELLOW)
             continue
@@ -1429,20 +1473,22 @@ def cmd_ml_tune(
             typer.secho(f"    {'':<20}saved -> {row['saved_to']}", fg=typer.colors.GREEN)
 
     typer.echo("")
-    scored = [r for r in results if "error" not in r]  # type: ignore[union-attr]
+    scored = [r for r in results if "error" not in r]
     if not scored:
         return
     if improved:
         typer.secho(
             f"  {improved} of {len(scored)} improved on test."
             + ("" if save else " Re-run with --save to keep them."),
-            fg=typer.colors.GREEN, bold=True,
+            fg=typer.colors.GREEN,
+            bold=True,
         )
     else:
         typer.secho(
             "  No target improved on test. The defaults are already reasonable;\n"
             "  a validation gain that does not survive to test was selection noise.",
-            fg=typer.colors.YELLOW, bold=True,
+            fg=typer.colors.YELLOW,
+            bold=True,
         )
     typer.echo("")
     for row in scored:
@@ -1480,12 +1526,10 @@ def cmd_ml_chain(
         # either, but two conventions in one file is how a typo becomes a
         # confusing error rather than an obvious one.
         try:
-            targets = (PredictionTarget[target.upper()],)
+            targets: tuple[PredictionTarget, ...] = (PredictionTarget[target.upper()],)
         except KeyError as exc:
             valid = ", ".join(t.name for t in CHAINABLE)
-            raise typer.BadParameter(
-                f"unknown target {target!r}. Chainable: {valid}"
-            ) from exc
+            raise typer.BadParameter(f"unknown target {target!r}. Chainable: {valid}") from exc
         if targets[0] not in CHAINABLE:
             raise typer.BadParameter(
                 f"{targets[0]} is not chainable -- minutes is the multiplier, "
@@ -1498,7 +1542,7 @@ def cmd_ml_chain(
     if start is not None or end is not None:
         codes = [f"E{y}" for y in range((start or 2000), (end or 2025) + 1)]
 
-    async def job() -> object:
+    async def job() -> list[dict[str, Any]]:
         results = []
         async with session_scope() as session:
             for item in targets:
@@ -1517,12 +1561,10 @@ def cmd_ml_chain(
     results = _run(job)
     typer.echo("")
     typer.secho("  Chained (minutes x rate) vs direct", bold=True)
-    typer.echo(
-        f"  {'target':<22}{'direct':>9}{'chained':>9}{'change':>9}{'baseline':>10}  verdict"
-    )
+    typer.echo(f"  {'target':<22}{'direct':>9}{'chained':>9}{'change':>9}{'baseline':>10}  verdict")
 
     wins = 0
-    for row in results:  # type: ignore[union-attr]
+    for row in results:
         if "error" in row:
             typer.secho(f"  {row['target']:<22}{row['error']}", fg=typer.colors.YELLOW)
             continue
@@ -1542,22 +1584,25 @@ def cmd_ml_chain(
             typer.secho(f"    {'':<20}{note}", fg=typer.colors.YELLOW)
 
     typer.echo("")
-    scored = [r for r in results if "error" not in r]  # type: ignore[union-attr]
+    scored = [r for r in results if "error" not in r]
     if wins and wins == len(scored):
         typer.secho(
             "  The chain wins on every target. Worth wiring into serving.",
-            fg=typer.colors.GREEN, bold=True,
+            fg=typer.colors.GREEN,
+            bold=True,
         )
     elif wins:
         typer.secho(
             f"  The chain wins on {wins} of {len(scored)}. Mixed - chain only where it wins.",
-            fg=typer.colors.YELLOW, bold=True,
+            fg=typer.colors.YELLOW,
+            bold=True,
         )
     else:
         typer.secho(
             "  Direct wins everywhere. Error compounding beat the stability gain;\n"
             "  the honest move is to leave the models as they are.",
-            fg=typer.colors.YELLOW, bold=True,
+            fg=typer.colors.YELLOW,
+            bold=True,
         )
 
 
@@ -1691,7 +1736,8 @@ def cmd_ml_spread(
         typer.echo("")
         colour = typer.colors.GREEN if r.verdict == "about right" else typer.colors.YELLOW
         typer.secho(
-            f"  {r.target} - {r.rows:,} test rows, expected values from {r.expected_source or 'median'}",
+            f"  {r.target} - {r.rows:,} test rows, expected values from "
+            f"{r.expected_source or 'median'}",
             bold=True,
         )
         typer.secho(
@@ -1700,10 +1746,16 @@ def cmd_ml_spread(
             fg=colour,
         )
         q = r.quantiles
-        typer.echo(f"    {'':<10}" + "".join(f"{'p' + str(int(float(k) * 100)):>8}" for k in q["actual"]) + f"{'std':>9}")
+        typer.echo(
+            f"    {'':<10}"
+            + "".join(f"{'p' + str(int(float(k) * 100)):>8}" for k in q["actual"])
+            + f"{'std':>9}"
+        )
         for name in ("median", "expected", "actual"):
             typer.echo(
-                f"    {name:<10}" + "".join(f"{v:>8.2f}" for v in q[name].values()) + f"{r.std[name]:>9.3f}"
+                f"    {name:<10}"
+                + "".join(f"{v:>8.2f}" for v in q[name].values())
+                + f"{r.std[name]:>9.3f}"
             )
         typer.echo("    by decile of expected value (projected -> actual):")
         typer.echo(
@@ -1787,7 +1839,8 @@ def cmd_ml_ablate(
         metric = "log loss" if report["metric"] == "log_loss" else "test MAE"
         typer.secho(
             f"  {report['target']} - {metric}, change vs all v6 "
-            f"(retraining noise {report['noise_pct']:.2f}%, helps above {report['helps_above_pct']:.2f}%)",
+            f"(retraining noise {report['noise_pct']:.2f}%, helps above "
+            f"{report['helps_above_pct']:.2f}%)",
             bold=True,
         )
         for row in report["variants"]:
@@ -1802,7 +1855,11 @@ def cmd_ml_ablate(
         for family, helped in verdict(reports).items():
             typer.secho(
                 f"    {family:<20}"
-                + (f"helps {', '.join(helped)}" if helped else "helps nothing: consider dropping it"),
+                + (
+                    f"helps {', '.join(helped)}"
+                    if helped
+                    else "helps nothing: consider dropping it"
+                ),
                 fg=typer.colors.GREEN if helped else typer.colors.YELLOW,
             )
         typer.echo(f"  saved: {path}")
@@ -1814,10 +1871,14 @@ def cmd_ml_walkforward(
         str | None,
         typer.Option("--target", "-t", help="Single stat target. Default: all five."),
     ] = None,
-    seasons: Annotated[int, typer.Option("--seasons", "-n", help="How many recent seasons to test.")] = 4,
+    seasons: Annotated[
+        int, typer.Option("--seasons", "-n", help="How many recent seasons to test.")
+    ] = 4,
     expected: Annotated[
         bool,
-        typer.Option("--expected/--no-expected", help="Also fit the expected-value head (twice as slow)."),
+        typer.Option(
+            "--expected/--no-expected", help="Also fit the expected-value head (twice as slow)."
+        ),
     ] = False,
 ) -> None:
     """Train on every season before N, test on season N, for recent seasons.
@@ -1841,7 +1902,9 @@ def cmd_ml_walkforward(
         except KeyError as exc:
             raise typer.BadParameter(f"unknown target {target!r}") from exc
         if targets[0] not in DEFAULT_TARGETS:
-            raise typer.BadParameter(f"{target} is not a stat target; walk-forward covers {DEFAULT_TARGETS}")
+            raise typer.BadParameter(
+                f"{target} is not a stat target; walk-forward covers {DEFAULT_TARGETS}"
+            )
     else:
         targets = DEFAULT_TARGETS
     current = _season_default()
@@ -1856,11 +1919,17 @@ def cmd_ml_walkforward(
                 typer.echo(f"  {t.name}: {len(rows):,} rows, training {seasons} fold(s)...")
                 results.append(
                     evaluate_target(
-                        rows, t, seasons=seasons, current_season=current,
-                        fit_expected=expected, params=load_params(t),
+                        rows,
+                        t,
+                        seasons=seasons,
+                        current_season=current,
+                        fit_expected=expected,
+                        params=load_params(t),
                     )
                 )
-        path = save_report(results, feature_set_version=FEATURE_SET_VERSION, now=SystemClock().now())
+        path = save_report(
+            results, feature_set_version=FEATURE_SET_VERSION, now=SystemClock().now()
+        )
         return results, path
 
     out: Any = _run(job)
@@ -1869,15 +1938,23 @@ def cmd_ml_walkforward(
         typer.echo("")
         summary = result.summary()
         typer.secho(
-            f"  {result.target.name}: beats the baseline in {summary['beats_baseline']}/{summary['folds']} "
+            f"  {result.target.name}: beats the baseline in "
+            f"{summary['beats_baseline']}/{summary['folds']} "
             f"seasons, median {summary['median_improvement_pct']:+.2f}% "
-            f"(worst {summary['worst_improvement_pct']:+.2f}%, best {summary['best_improvement_pct']:+.2f}%)"
-            if summary["folds"] else f"  {result.target.name}: no season had enough rows",
+            f"(worst {summary['worst_improvement_pct']:+.2f}%, best "
+            f"{summary['best_improvement_pct']:+.2f}%)"
+            if summary["folds"]
+            else f"  {result.target.name}: no season had enough rows",
             bold=True,
-            fg=typer.colors.GREEN if summary["folds"] and summary["beats_baseline"] == summary["folds"]
+            fg=typer.colors.GREEN
+            if summary["folds"] and summary["beats_baseline"] == summary["folds"]
             else typer.colors.YELLOW,
         )
-        header = f"    {'season':<9}{'test rows':>10}{'model MAE':>11}{'baseline':>10}{'gain':>9}{'bias':>8}{'80% cov':>9}"
+        header = (
+            "    "
+            f"{'season':<9}{'test rows':>10}{'model MAE':>11}{'baseline':>10}"
+            f"{'gain':>9}{'bias':>8}{'80% cov':>9}"
+        )
         if expected:
             header += f"{'RMSE med':>10}{'RMSE exp':>10}"
         typer.echo(header + "  baseline used")
@@ -1889,11 +1966,13 @@ def cmd_ml_walkforward(
                 + (f"{fold.covered_80:>9.1%}" if fold.covered_80 is not None else f"{'-':>9}")
             )
             if expected:
-                line += (
-                    f"{fold.median_rmse if fold.median_rmse is not None else float('nan'):>10.3f}"
-                    f"{fold.expected_rmse if fold.expected_rmse is not None else float('nan'):>10.3f}"
-                )
-            typer.secho(line + f"  {fold.baseline}", fg=None if fold.beats_baseline else typer.colors.RED)
+                nan = float("nan")
+                median_rmse = fold.median_rmse if fold.median_rmse is not None else nan
+                expected_rmse = fold.expected_rmse if fold.expected_rmse is not None else nan
+                line += f"{median_rmse:>10.3f}{expected_rmse:>10.3f}"
+            typer.secho(
+                line + f"  {fold.baseline}", fg=None if fold.beats_baseline else typer.colors.RED
+            )
     typer.echo("")
     typer.echo("  * season still being played")
     typer.echo(f"  saved: {path}")
@@ -1930,8 +2009,7 @@ def cmd_ml_train(
         typer.Option(
             "--target",
             "-t",
-            help="Single target, e.g. POINTS or PLAYS. Default: all five stat "
-            "targets, then PLAYS.",
+            help="Single target, e.g. POINTS or PLAYS. Default: all five stat targets, then PLAYS.",
         ),
     ] = None,
     start: Annotated[int | None, typer.Option("--from", help="First season start year.")] = None,
@@ -1961,13 +2039,13 @@ def cmd_ml_train(
     PLAYS, the probability that a player takes the floor at all, is judged on
     log loss against appearance-rate baselines rather than on MAE.
     """
-    from euroleague_ai.models.enums import PredictionTarget
     from euroleague_ai.ml.pipeline import train_and_register
     from euroleague_ai.ml.report import SERVED_TARGETS
+    from euroleague_ai.models.enums import PredictionTarget
 
     if target:
         try:
-            targets = (PredictionTarget[target.upper()],)
+            targets: tuple[PredictionTarget, ...] = (PredictionTarget[target.upper()],)
         except KeyError as exc:
             valid = ", ".join(t.name for t in PredictionTarget)
             raise typer.BadParameter(f"unknown target {target!r}. Valid: {valid}") from exc
@@ -1978,7 +2056,7 @@ def cmd_ml_train(
     if start is not None or end is not None:
         codes = [f"E{y}" for y in range((start or 2000), (end or 2025) + 1)]
 
-    async def job() -> object:
+    async def job() -> dict[str, Any]:
         async with session_scope() as session:
             return await train_and_register(
                 session,
@@ -2072,7 +2150,7 @@ def cmd_ml_train(
 
         _print_expectation(s.get("expectation"))
 
-        typer.echo(f"    top features: " + ", ".join(n for n, _ in block["top_features"][:5]))
+        typer.echo("    top features: " + ", ".join(n for n, _ in block["top_features"][:5]))
         typer.echo(f"    artifact:     {block['model']['artifact']}")
 
     if report["targets"]:
@@ -2145,7 +2223,10 @@ def cmd_ml_reconcile(
         f"{r['periods']['test_start'][:10]})"
     )
     typer.echo("")
-    typer.echo(f"  {'alpha':>5}  {'player MAE':>10}  {'player bias':>11}  {'squad error':>11}  {'squad bias':>10}")
+    typer.echo(
+        f"  {'alpha':>5}  {'player MAE':>10}  {'player bias':>11}  {'squad error':>11}  "
+        f"{'squad bias':>10}"
+    )
     for row in r["validation"]:
         marker = "  <- chosen" if row["alpha"] == r["alpha"] else ""
         typer.echo(
@@ -2156,7 +2237,8 @@ def cmd_ml_reconcile(
     typer.echo("")
     typer.echo("  test period (unseen by both models):")
     typer.echo(
-        f"    unscaled      player MAE {base['player_mae']:.3f}   squad error {base['squad_mae']:.2f} "
+        f"    unscaled      player MAE {base['player_mae']:.3f}   squad error "
+        f"{base['squad_mae']:.2f} "
         f"(bias {base['squad_bias']:+.2f})"
     )
     typer.echo(
@@ -2181,7 +2263,9 @@ def cmd_ml_reconcile(
     if save:
         typer.echo(f"  saved: {reconciliation_path()}")
 
-    _print_stats_reconciliation(stats_report, saved_to=stats_reconciliation_path() if save else None)
+    _print_stats_reconciliation(
+        stats_report, saved_to=stats_reconciliation_path() if save else None
+    )
     if save:
         typer.echo("")
         typer.echo("  next:  euroleague-ai ml predict --days 7")
@@ -2190,13 +2274,18 @@ def cmd_ml_reconcile(
 def _print_stats_reconciliation(report: Any, *, saved_to: Any) -> None:
     typer.echo("")
     if isinstance(report, str):
-        typer.secho(f"Squad stat reconciliation - not fitted: {report}", fg=typer.colors.YELLOW, bold=True)
+        typer.secho(
+            f"Squad stat reconciliation - not fitted: {report}", fg=typer.colors.YELLOW, bold=True
+        )
         return
     models = report["models"]
     typer.secho("Squad stat reconciliation - toward each side's expected team line", bold=True)
     typer.echo(
-        f"  models: {', '.join(models[name] for name in ('POINTS', 'ASSISTS', 'REBOUNDS', 'THREE_POINTERS_MADE'))}"
-        f" + {models['PLAYS']}"
+        "  models: "
+        + ", ".join(
+            models[name] for name in ("POINTS", "ASSISTS", "REBOUNDS", "THREE_POINTERS_MADE")
+        )
+        + f" + {models['PLAYS']}"
     )
     typer.echo(
         f"  validation from {report['periods']['fit_start'][:10]}, "
@@ -2207,10 +2296,18 @@ def _print_stats_reconciliation(report: Any, *, saved_to: Any) -> None:
         f"  {'stat':<9}{'alpha':>6}  {'squad error':>17}  {'squad bias':>17}  "
         f"{'player RMSE':>17}  {'change in sq. err (SE)':>23}  result"
     )
-    labels = {"POINTS": "points", "ASSISTS": "assists", "REBOUNDS": "rebounds",
-              "THREE_POINTERS_MADE": "threes"}
+    labels = {
+        "POINTS": "points",
+        "ASSISTS": "assists",
+        "REBOUNDS": "rebounds",
+        "THREE_POINTERS_MADE": "threes",
+    }
     for name, fit in report["targets"].items():
-        base, new, delta = fit["test"]["unscaled"], fit["test"]["scaled"], fit["test"]["player_delta"]
+        base, new, delta = (
+            fit["test"]["unscaled"],
+            fit["test"]["scaled"],
+            fit["test"]["player_delta"],
+        )
         ok = bool(fit["enabled"])
         typer.secho(
             f"  {labels.get(name, name):<9}{fit['alpha']:>6.1f}  "
@@ -2232,7 +2329,7 @@ def cmd_ml_models() -> None:
     """List registered models, newest first."""
     from euroleague_ai.ml.registry import list_models
 
-    async def job() -> object:
+    async def job() -> list[dict[str, Any]]:
         async with session_scope() as session:
             rows = await list_models(session)
             return [
@@ -2252,15 +2349,13 @@ def cmd_ml_models() -> None:
             ]
 
     models = _run(job)
-    if not models:  # type: ignore[truthy-bool]
+    if not models:
         typer.echo("no models registered yet - run `euroleague-ai ml train`")
         return
 
     typer.echo("")
-    typer.echo(
-        f"  {'name':<27}{'ver':<8}{'feat':<6}{'MAE':>9}{'base':>9}{'impr%':>8}  active"
-    )
-    for m in models:  # type: ignore[union-attr]
+    typer.echo(f"  {'name':<27}{'ver':<8}{'feat':<6}{'MAE':>9}{'base':>9}{'impr%':>8}  active")
+    for m in models:
         mae = m["mae"] if m["mae"] is not None else float("nan")
         base = m["baseline_mae"] if m["baseline_mae"] is not None else float("nan")
         impr = m["improvement"] if m["improvement"] is not None else float("nan")
@@ -2291,7 +2386,7 @@ def cmd_ml_predict(
     """
     from euroleague_ai.ml.inference import predict_upcoming
 
-    async def job() -> object:
+    async def job() -> dict[str, Any]:
         async with session_scope() as session:
             return await predict_upcoming(
                 session,
@@ -2302,22 +2397,22 @@ def cmd_ml_predict(
 
     result = _run(job)
     typer.echo("")
-    if "error" in result:  # type: ignore[operator]
-        typer.secho(f"  {result['error']}", fg=typer.colors.RED, bold=True)  # type: ignore[index]
+    if "error" in result:
+        typer.secho(f"  {result['error']}", fg=typer.colors.RED, bold=True)
         raise typer.Exit(code=1)
 
     typer.secho(
-        f"  {result['predictions']:,} predictions across {result['games']} game(s)",  # type: ignore[index]
+        f"  {result['predictions']:,} predictions across {result['games']} game(s)",
         fg=typer.colors.GREEN,
         bold=True,
     )
-    for target, model in (result.get("models") or {}).items():  # type: ignore[union-attr]
+    for target, model in (result.get("models") or {}).items():
         typer.echo(f"    {target:<24} {model}")
-    if "minutes_reconciliation" in result:  # type: ignore[operator]
-        typer.echo(f"    {'squad minutes':<24} {result['minutes_reconciliation']}")  # type: ignore[index]
-    if "stats_reconciliation" in result:  # type: ignore[operator]
-        typer.echo(f"    {'squad stats':<24} {result['stats_reconciliation']}")  # type: ignore[index]
-    if result["games"] == 0:  # type: ignore[index]
+    if "minutes_reconciliation" in result:
+        typer.echo(f"    {'squad minutes':<24} {result['minutes_reconciliation']}")
+    if "stats_reconciliation" in result:
+        typer.echo(f"    {'squad stats':<24} {result['stats_reconciliation']}")
+    if result["games"] == 0:
         typer.secho(
             "  No scheduled games in the window. Ingest a season with upcoming\n"
             "  fixtures first:  euroleague-ai ingest all --season E2026",
@@ -2361,9 +2456,7 @@ def cmd_ml_show(
                 )
             ).scalar_one_or_none()
             if game is None:
-                raise typer.BadParameter(
-                    f"game {game_code} not found in season {season_code}"
-                )
+                raise typer.BadParameter(f"game {game_code} not found in season {season_code}")
 
             # Only the current view. Predictions are append-only by design --
             # a projection made before a transfer is a legitimate historical
@@ -2397,24 +2490,34 @@ def cmd_ml_show(
             ).all()
 
             by_player: dict[str, dict[str, Any]] = {}
-            for full_name, target, value, quantiles, thresholds, confidence, expected, explanation in rows:
+            for (
+                full_name,
+                target,
+                value,
+                quantiles,
+                thresholds,
+                confidence,
+                expected,
+                explanation,
+            ) in rows:
                 entry = by_player.setdefault(full_name, {})
                 availability = (explanation or {}).get("availability")
                 if availability and "status" not in entry:
                     entry["status"] = availability.get("status")
                 entry[str(target)] = float(value)
                 if expected is not None:
-                    entry[f"{str(target)}_e"] = float(expected)
+                    entry[f"{target!s}_e"] = float(expected)
                 # str() explicitly: PredictionTarget is a StrEnum today, but
                 # relying on f-string formatting of an enum is the kind of thing
                 # that silently changes key names if the base class ever does.
-                entry[f"{str(target)}_q"] = quantiles
-                entry[f"{str(target)}_p"] = thresholds
-                if confidence is not None:
-                    # One confidence per player, not per target. Minutes drives
-                    # every other line, so its spread is the honest summary.
-                    if str(target) == "MINUTES" or "confidence" not in entry:
-                        entry["confidence"] = float(confidence)
+                entry[f"{target!s}_q"] = quantiles
+                entry[f"{target!s}_p"] = thresholds
+                # One confidence per player, not per target. Minutes drives
+                # every other line, so its spread is the honest summary.
+                if confidence is not None and (
+                    str(target) == "MINUTES" or "confidence" not in entry
+                ):
+                    entry["confidence"] = float(confidence)
             return {"tip_off": game.tip_off_utc.isoformat(), "players": by_player}
 
     data = _run(job)
@@ -2435,9 +2538,8 @@ def cmd_ml_show(
         f"  {'player':<28}{'play':>6}{'MIN':>7}{'PTS':>7}{'REB':>7}{'AST':>7}{'3PM':>7}"
         f"{'conf':>7}   pts 10/15/20/25"
     )
-    for name, values in sorted(
-        players.items(), key=lambda kv: -kv[1].get("MINUTES", 0.0)
-    ):
+    for name, values in sorted(players.items(), key=lambda kv: -kv[1].get("MINUTES", 0.0)):
+
         def cell(target: str, values: dict[str, Any] = values) -> float:
             if use_expected and f"{target}_e" in values:
                 return float(values[f"{target}_e"])
@@ -2456,7 +2558,7 @@ def cmd_ml_show(
         probabilities = values.get("POINTS_p") or {}
         odds = (
             "  ".join(
-                f"{int(round(float(probabilities[key]) * 100)):>2}%"
+                f"{round(float(probabilities[key]) * 100):>2}%"
                 for key in ("10", "15", "20", "25")
                 if key in probabilities
             )
@@ -2497,7 +2599,7 @@ def cmd_ml_score(
     """
     from euroleague_ai.ml.outcomes import score_predictions
 
-    async def job() -> object:
+    async def job() -> dict[str, Any]:
         async with session_scope() as session:
             result = await score_predictions(
                 session,
@@ -2510,20 +2612,19 @@ def cmd_ml_score(
     result = _run(job)
     typer.echo("")
     typer.secho(
-        f"  {result['predictions_scored']:,} scored across "  # type: ignore[index]
-        f"{result['games']} finished game(s)",  # type: ignore[index]
+        f"  {result['predictions_scored']:,} scored across {result['games']} finished game(s)",
         fg=typer.colors.GREEN,
         bold=True,
     )
-    if result["already_scored"]:  # type: ignore[index]
-        typer.echo(f"    {result['already_scored']:,} already had outcomes")  # type: ignore[index]
-    if result["did_not_appear"]:  # type: ignore[index]
+    if result["already_scored"]:
+        typer.echo(f"    {result['already_scored']:,} already had outcomes")
+    if result["did_not_appear"]:
         typer.secho(
-            f"    {result['did_not_appear']:,} for players who never took the floor "  # type: ignore[index]
+            f"    {result['did_not_appear']:,} for players who never took the floor "
             "(scored zero, excluded from MAE by default)",
             fg=typer.colors.YELLOW,
         )
-    for target, count in (result.get("targets") or {}).items():  # type: ignore[union-attr]
+    for target, count in (result.get("targets") or {}).items():
         typer.echo(f"    {target:<24}{count:>8,}")
 
 
@@ -2545,45 +2646,44 @@ def cmd_ml_accuracy(
     """
     from euroleague_ai.ml.outcomes import accuracy_report, unscored_games
 
-    async def job() -> object:
+    async def job() -> dict[str, Any]:
         async with session_scope() as session:
             report = await accuracy_report(
                 session,
                 season_code=season or None,
                 include_absent=include_absent,
             )
-            report["unscored_games"] = await unscored_games(
-                session, season_code=season or None
-            )
+            report["unscored_games"] = await unscored_games(session, season_code=season or None)
             return report
 
     report = _run(job)
-    targets = report.get("targets") or {}  # type: ignore[union-attr]
+    targets = report.get("targets") or {}
     if not targets:
         typer.secho(
-            "  Nothing scored yet. Ingest a played round, then:\n"
-            "    euroleague-ai ml score",
+            "  Nothing scored yet. Ingest a played round, then:\n    euroleague-ai ml score",
             fg=typer.colors.YELLOW,
         )
         return
 
     typer.echo("")
-    typer.secho(f"  Realised accuracy - season {report['season']}", bold=True)  # type: ignore[index]
+    typer.secho(f"  Realised accuracy - season {report['season']}", bold=True)
     typer.echo(f"  {'target':<24}{'n':>7}{'MAE':>9}{'bias':>9}{'80% int':>10}")
     for target, block in targets.items():
         interval = block.get("interval") or {}
         covered = interval.get("covered_80")
         cell = "        -" if covered is None else f"{covered:>9.1%}"
         typer.echo(
-            f"  {target:<24}{block['scored']:>7,}{block['mae']:>9.4f}"
-            f"{block['bias']:>+9.3f}{cell}"
+            f"  {target:<24}{block['scored']:>7,}{block['mae']:>9.4f}{block['bias']:>+9.3f}{cell}"
         )
 
     for key, title in (
         ("thresholds", "Threshold calibration - P(X+) if he plays"),
-        ("thresholds_overall", "Threshold calibration - overall P(X+), sitting out counts as a miss"),
+        (
+            "thresholds_overall",
+            "Threshold calibration - overall P(X+), sitting out counts as a miss",
+        ),
     ):
-        bands = report.get(key) or []  # type: ignore[union-attr]
+        bands = report.get(key) or []
         if not bands:
             continue
         typer.echo("")
@@ -2593,16 +2693,14 @@ def cmd_ml_accuracy(
             realised = band["realised"]
             drift = realised - band["expected"]
             typer.secho(
-                f"  {band['band']:<12}{band['predictions']:>8,}{realised:>11.1%}"
-                f"{drift:>+9.1%}",
+                f"  {band['band']:<12}{band['predictions']:>8,}{realised:>11.1%}{drift:>+9.1%}",
                 fg=typer.colors.YELLOW if abs(drift) > 0.1 else None,
             )
 
-    outstanding = report.get("unscored_games") or 0  # type: ignore[union-attr]
+    outstanding = report.get("unscored_games") or 0
     if outstanding:
         typer.secho(
-            f"\n  {outstanding} finished game(s) still unscored - run "
-            "`euroleague-ai ml score`",
+            f"\n  {outstanding} finished game(s) still unscored - run `euroleague-ai ml score`",
             fg=typer.colors.YELLOW,
         )
 
@@ -2610,9 +2708,7 @@ def cmd_ml_accuracy(
 @ml_app.command("why")
 def cmd_ml_why(
     game_code: Annotated[int, typer.Option("--game-code", "-g")],
-    player: Annotated[
-        str, typer.Option("--player", "-p", help="Name, or any part of one.")
-    ],
+    player: Annotated[str, typer.Option("--player", "-p", help="Name, or any part of one.")],
     season: SeasonOption = "",
     raw: Annotated[
         bool,
@@ -2632,7 +2728,7 @@ def cmd_ml_why(
     from euroleague_ai.models.people import Player
     from euroleague_ai.models.prediction import ModelVersion, Prediction
 
-    async def job() -> object:
+    async def job() -> list[dict[str, Any]]:
         async with session_scope() as session:
             season_code = season or _season_default()
             game = (
@@ -2643,9 +2739,7 @@ def cmd_ml_why(
                 )
             ).scalar_one_or_none()
             if game is None:
-                raise typer.BadParameter(
-                    f"game {game_code} not found in season {season_code}"
-                )
+                raise typer.BadParameter(f"game {game_code} not found in season {season_code}")
 
             rows = (
                 await session.execute(
@@ -2675,20 +2769,21 @@ def cmd_ml_why(
             ]
 
     results = _run(job)
-    if not results:  # type: ignore[truthy-bool]
+    if not results:
         typer.echo(f"no predictions matching '{player}' in game {game_code}")
         return
 
-    order = {t: i for i, t in enumerate(
-        ["MINUTES", "POINTS", "REBOUNDS", "ASSISTS", "THREE_POINTERS_MADE"]
-    )}
-    results = sorted(  # type: ignore[assignment]
-        results,  # type: ignore[arg-type]
+    order = {
+        t: i
+        for i, t in enumerate(["MINUTES", "POINTS", "REBOUNDS", "ASSISTS", "THREE_POINTERS_MADE"])
+    }
+    results = sorted(
+        results,
         key=lambda r: (r["player"], order.get(r["target"], 99)),
     )
 
     current = None
-    for row in results:  # type: ignore[union-attr]
+    for row in results:
         if row["player"] != current:
             current = row["player"]
             typer.echo("")
@@ -2702,12 +2797,9 @@ def cmd_ml_why(
             continue
 
         for driver in explanation.get("drivers", []):
-            colour = (
-                typer.colors.GREEN if driver["direction"] == "+" else typer.colors.RED
-            )
+            colour = typer.colors.GREEN if driver["direction"] == "+" else typer.colors.RED
             typer.secho(
-                f"      {driver['direction']} {driver['label']:<38}"
-                f"{driver['impact']:>+7.2f}",
+                f"      {driver['direction']} {driver['label']:<38}{driver['impact']:>+7.2f}",
                 fg=colour,
             )
 
@@ -2748,9 +2840,7 @@ def cmd_ml_roster(
                 )
             ).scalar_one_or_none()
             if game is None:
-                raise typer.BadParameter(
-                    f"game {game_code} not found in season {season_code}"
-                )
+                raise typer.BadParameter(f"game {game_code} not found in season {season_code}")
 
             cutoff = default_prediction_timestamp(game.tip_off_utc, settings)
             club_by_player = await current_club(session, as_of=cutoff)
@@ -2760,9 +2850,7 @@ def cmd_ml_roster(
                 (game.home_team_id, "HOME"),
                 (game.away_team_id, "AWAY"),
             ):
-                team = (
-                    await session.execute(select(Team).where(Team.id == team_id))
-                ).scalar_one()
+                team = (await session.execute(select(Team).where(Team.id == team_id))).scalar_one()
                 players = await candidate_players(
                     session,
                     team_id=team_id,
@@ -2799,8 +2887,9 @@ def cmd_ml_roster(
     typer.secho(f"  cutoff {data['cutoff']}", bold=True)  # type: ignore[index]
     for label, team_name, players in data["sides"]:  # type: ignore[index]
         typer.echo("")
-        typer.secho(f"  {label}  {team_name}  ({len(players)} players)",
-                    fg=typer.colors.CYAN, bold=True)
+        typer.secho(
+            f"  {label}  {team_name}  ({len(players)} players)", fg=typer.colors.CYAN, bold=True
+        )
         for name, registered in players:
             typer.echo(f"    {name:<32} registered {registered}")
         if not players:

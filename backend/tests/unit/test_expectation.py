@@ -119,9 +119,7 @@ class TestShiftedMedian:
             [30.0] * len(residuals),
         )
         assert distribution.mean_residual(5.0, 30.0) == pytest.approx(1.0)
-        assert shifted_median([5.0], None, distribution, histories=[30.0]) == [
-            pytest.approx(6.0)
-        ]
+        assert shifted_median([5.0], None, distribution, histories=[30.0]) == [pytest.approx(6.0)]
 
         negative = ResidualDistribution(level_edges=[], cells={}, by_history={}, pooled=[-9.0])
         assert shifted_median([1.0], None, negative, histories=[None]) == [0.0]
@@ -182,7 +180,6 @@ def result() -> Any:
 
 
 class TestTrainingEndToEnd:
-
     def test_expected_value_closes_the_squad_total_gap(self, result: Any) -> None:
         expectation = result.expectation
         assert expectation is not None
@@ -220,8 +217,9 @@ class TestTrainingEndToEnd:
         assert expected[0] > medians[0]  # a skewed stat averages above its median
 
     def test_tuner_can_skip_the_head(self) -> None:
-        quick = train_target(_skewed_world(games=300, seed=1), PredictionTarget.POINTS,
-                             fit_expected=False)
+        quick = train_target(
+            _skewed_world(games=300, seed=1), PredictionTarget.POINTS, fit_expected=False
+        )
         assert quick.expectation is None
         assert quick.summary()["expectation"] is None
 

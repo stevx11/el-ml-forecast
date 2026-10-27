@@ -167,9 +167,7 @@ async def build_player_form_features(
 
     # Rolling windows read the player's *career*, crossing season boundaries.
     # "Last five games" means the last five games, full stop.
-    career = await players.recent_games(
-        player_id, as_of=as_of, limit=max(WINDOWS), season_id=None
-    )
+    career = await players.recent_games(player_id, as_of=as_of, limit=max(WINDOWS), season_id=None)
     # Season aggregates stay scoped, because "this season's average" is a
     # different and legitimate quantity.
     season_history = await players.recent_games(
@@ -203,9 +201,7 @@ async def build_player_form_features(
         features[f"trend10_{name}"] = _round(_trend(window_values[:10]))
 
     features.update(_role_features(career))
-    features.update(
-        await _schedule_features(players, teams, player_id, team_id, as_of=as_of)
-    )
+    features.update(await _schedule_features(players, teams, player_id, team_id, as_of=as_of))
     return features
 
 
@@ -228,12 +224,8 @@ def _role_features(history: list[PlayerGameLine]) -> dict[str, float | None]:
 
     return {
         "starter_last_game": float(history[0].is_starter),
-        "starter_rate_last5": _round(
-            _mean([float(line.is_starter) for line in history[:5]])
-        ),
-        "starter_rate_recent": _round(
-            _mean([float(line.is_starter) for line in history])
-        ),
+        "starter_rate_last5": _round(_mean([float(line.is_starter) for line in history[:5]])),
+        "starter_rate_recent": _round(_mean([float(line.is_starter) for line in history])),
         # Per-40 rather than per-game: it separates role from playing time, which
         # is what makes a bench player's usage comparable to a starter's.
         "fga_per40": _round(total_fga * 40.0 / total_minutes) if total_minutes else None,

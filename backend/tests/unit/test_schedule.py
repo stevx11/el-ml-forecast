@@ -86,15 +86,11 @@ class TestNextRun:
 
     def test_month_boundary(self) -> None:
         end_of_month = datetime(2026, 9, 30, 23, 0, tzinfo=UTC)
-        assert next_run_at(end_of_month, (MORNING,)) == datetime(
-            2026, 10, 1, 6, 0, tzinfo=UTC
-        )
+        assert next_run_at(end_of_month, (MORNING,)) == datetime(2026, 10, 1, 6, 0, tzinfo=UTC)
 
     def test_year_boundary(self) -> None:
         new_years_eve = datetime(2026, 12, 31, 23, 0, tzinfo=UTC)
-        assert next_run_at(new_years_eve, (MORNING,)) == datetime(
-            2027, 1, 1, 6, 0, tzinfo=UTC
-        )
+        assert next_run_at(new_years_eve, (MORNING,)) == datetime(2027, 1, 1, 6, 0, tzinfo=UTC)
 
     def test_unordered_input_still_works(self) -> None:
         """Callers should not have to sort; the function does."""
@@ -103,7 +99,7 @@ class TestNextRun:
     def test_naive_datetimes_are_rejected(self) -> None:
         """Guessing that a naive timestamp is UTC is still a guess."""
         with pytest.raises(ValueError):
-            next_run_at(datetime(2026, 9, 15, 5, 0), BOTH)
+            next_run_at(datetime(2026, 9, 15, 5, 0), BOTH)  # noqa: DTZ001 - deliberately naive
 
     def test_no_run_times_is_an_error(self) -> None:
         with pytest.raises(ValueError, match="must not be empty"):

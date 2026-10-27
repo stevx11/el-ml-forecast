@@ -139,9 +139,7 @@ class TestConfidenceReflectsWhatWeActuallyKnow:
     and this is the test that keeps it from happening.
     """
 
-    def _mixed_world(
-        self, seed: int = 11
-    ) -> tuple[list[float], list[float], list[float | None]]:
+    def _mixed_world(self, seed: int = 11) -> tuple[list[float], list[float], list[float | None]]:
         rng = random.Random(seed)
         predictions: list[float] = []
         actuals: list[float] = []
@@ -285,9 +283,9 @@ class TestRoundTrip:
         restored = ResidualDistribution.from_dict(original.to_dict())
 
         assert restored.quantiles(12.0, 40.0) == original.quantiles(12.0, 40.0)
-        assert restored.probability_at_least(
+        assert restored.probability_at_least(12.0, 40.0, 15.0) == original.probability_at_least(
             12.0, 40.0, 15.0
-        ) == original.probability_at_least(12.0, 40.0, 15.0)
+        )
         assert restored.confidence(12.0, 40.0) == original.confidence(12.0, 40.0)
 
 

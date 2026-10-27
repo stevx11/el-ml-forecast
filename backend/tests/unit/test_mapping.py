@@ -62,8 +62,7 @@ class TestPlayers:
         stints = [
             stint
             for row in rows
-            if (stint := map_player_stint(row)) is not None
-            and stint.external_id == "011003"
+            if (stint := map_player_stint(row)) is not None and stint.external_id == "011003"
         ]
         assert len(stints) == 2
 

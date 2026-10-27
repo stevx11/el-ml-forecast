@@ -45,9 +45,7 @@ def season_ref(season_code: str, settings: Settings | None = None) -> SeasonRef:
     resolved = settings or get_settings()
     digits = "".join(ch for ch in season_code if ch.isdigit())
     if len(digits) < 4:
-        raise ConfigurationError(
-            f"season code {season_code!r} does not contain a four-digit year"
-        )
+        raise ConfigurationError(f"season code {season_code!r} does not contain a four-digit year")
     return SeasonRef(
         competition_code=resolved.euroleague_competition_code,
         season_code=season_code,

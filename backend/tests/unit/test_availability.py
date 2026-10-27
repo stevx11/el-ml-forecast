@@ -221,9 +221,7 @@ class TestTraining:
         assert set(summary["rows"]) == {"train", "validation", "test"}
 
     def test_single_class_training_is_refused(self) -> None:
-        rows = [
-            _row(played=True, day=day, features={"x": float(day)}) for day in range(100)
-        ]
+        rows = [_row(played=True, day=day, features={"x": float(day)}) for day in range(100)]
         with pytest.raises(ValueError, match="only one class"):
             train_availability(rows)
 
@@ -262,7 +260,9 @@ class TestPlaysExplanations:
     def test_blowouts_read_as_a_deeper_rotation(self) -> None:
         """The stat phrase for a negative game script says "shorter rotation";
         for P(plays) a positive one has to say the opposite."""
-        assert phrase_for("game_script", 1.0, PLAYS_PHRASES) == "Game script favours a deep rotation"
+        assert (
+            phrase_for("game_script", 1.0, PLAYS_PHRASES) == "Game script favours a deep rotation"
+        )
 
     def test_log_odds_scale_and_threshold(self) -> None:
         explanation = explain_prediction(

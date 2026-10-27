@@ -134,9 +134,7 @@ async def _targets(session: AsyncSession, game: Game) -> list[_PlayerGameTarget]
             opponent_team_id=opponent_team_id,
             is_home=side is TeamSide.HOME,
         )
-        for player_id, team_id, side, opponent_team_id in (
-            await session.execute(stmt)
-        ).all()
+        for player_id, team_id, side, opponent_team_id in (await session.execute(stmt)).all()
     ]
 
 
@@ -310,9 +308,7 @@ async def _games_to_process(
         # dropping them would silently remove playoff games.
         stmt = stmt.where((Game.round_number.is_(None)) | (Game.round_number >= min_round))
     if season_codes:
-        stmt = stmt.join(Season, Season.id == Game.season_id).where(
-            Season.code.in_(season_codes)
-        )
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code.in_(season_codes))
     return list((await session.execute(stmt)).scalars().all())
 
 
@@ -345,9 +341,7 @@ async def backfill_snapshots(
     # Session-scoped advisory lock. Released automatically when the connection
     # closes, so a crashed run cannot leave the job permanently blocked.
     acquired = (
-        await session.execute(
-            text("SELECT pg_try_advisory_lock(:key)"), {"key": ADVISORY_LOCK_KEY}
-        )
+        await session.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": ADVISORY_LOCK_KEY})
     ).scalar_one()
     if not acquired:
         raise RuntimeError(
@@ -356,9 +350,7 @@ async def backfill_snapshots(
             "for it to finish, or stop it first."
         )
 
-    games = await _games_to_process(
-        session, season_codes=season_codes, min_round=min_round
-    )
+    games = await _games_to_process(session, season_codes=season_codes, min_round=min_round)
     if limit is not None:
         games = games[:limit]
 

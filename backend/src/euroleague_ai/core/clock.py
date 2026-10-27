@@ -30,9 +30,7 @@ def ensure_utc(value: datetime, *, field: str = "datetime") -> datetime:
             correctness depends on time ordering is not acceptable.
     """
     if value.tzinfo is None:
-        raise ValueError(
-            f"{field} must be timezone-aware; got naive datetime {value.isoformat()}"
-        )
+        raise ValueError(f"{field} must be timezone-aware; got naive datetime {value.isoformat()}")
     return value.astimezone(UTC)
 
 

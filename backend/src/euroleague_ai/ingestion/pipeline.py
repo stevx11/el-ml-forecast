@@ -27,6 +27,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from euroleague_ai.core.clock import Clock, SystemClock
 from euroleague_ai.core.logging import get_logger
+from euroleague_ai.ingestion.identity import IdentityResolver
+from euroleague_ai.ingestion.knowability import (
+    box_score_observed_at,
+    fixture_observed_at,
+    stint_observed_at,
+)
 from euroleague_ai.models.competition import League, Season, Team, TeamSeason
 from euroleague_ai.models.enums import EntityType, GameStatus, TeamSide
 from euroleague_ai.models.game import Game, GameTeam, PlayerGameStats, TeamGameStats
@@ -40,12 +46,6 @@ from euroleague_ai.providers.base import (
     TeamStatsDTO,
 )
 from euroleague_ai.providers.parsing import estimate_pace, estimate_possessions
-from euroleague_ai.ingestion.identity import IdentityResolver
-from euroleague_ai.ingestion.knowability import (
-    box_score_observed_at,
-    fixture_observed_at,
-    stint_observed_at,
-)
 
 logger = get_logger(__name__)
 
@@ -262,7 +262,10 @@ class IngestionPipeline:
                 continue
 
             written = await self._upsert_stint(
-                dto, player_id, team_id, season,
+                dto,
+                player_id,
+                team_id,
+                season,
                 stint_observed_at(dto.effective_from, observed_at),
             )
             result.rows_written += written
@@ -308,9 +311,7 @@ class IngestionPipeline:
         if not stale:
             return 0
 
-        await self._session.execute(
-            delete(PlayerTeamStint).where(PlayerTeamStint.id.in_(stale))
-        )
+        await self._session.execute(delete(PlayerTeamStint).where(PlayerTeamStint.id.in_(stale)))
         await self._session.flush()
         return len(stale)
 
@@ -465,9 +466,7 @@ class IngestionPipeline:
 
     # -- box scores --------------------------------------------------------
 
-    async def upsert_game_stats(
-        self, stats: GameStatsDTO, season: Season
-    ) -> IngestionResult:
+    async def upsert_game_stats(self, stats: GameStatsDTO, season: Season) -> IngestionResult:
         """Write both sides of a completed game's box score."""
         result = IngestionResult(rows_read=1)
 
@@ -516,9 +515,7 @@ class IngestionPipeline:
 
         written = 0
         for line in team_stats.players:
-            player_id = await self._resolver.lookup(
-                EntityType.PLAYER, line.player_external_id
-            )
+            player_id = await self._resolver.lookup(EntityType.PLAYER, line.player_external_id)
             if player_id is None:
                 # A player appearing in a box score before the roster feed knows
                 # about them -- common for mid-season signings. Register them now

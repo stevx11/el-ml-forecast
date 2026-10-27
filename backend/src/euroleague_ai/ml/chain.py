@@ -184,8 +184,12 @@ def compare_chain(
 
     # -- direct: one model straight to the counting stat, as today -----------
     direct_booster, direct_best = _fit(
-        x_train, y_direct_train, x_validation, y_direct_validation,
-        feature_names, params=params,
+        x_train,
+        y_direct_train,
+        x_validation,
+        y_direct_validation,
+        feature_names,
+        params=params,
     )
     direct_validation = direct_booster.predict(x_validation, num_iteration=direct_best)
     direct_offset = calibration_offset(direct_validation, y_direct_validation)
@@ -202,8 +206,12 @@ def compare_chain(
     y_minutes_test = np.array([r.actual_minutes for r in test_rows], dtype=float)
 
     minutes_booster, minutes_best = _fit(
-        x_train, y_minutes_train, x_validation, y_minutes_validation,
-        feature_names, params=params,
+        x_train,
+        y_minutes_train,
+        x_validation,
+        y_minutes_validation,
+        feature_names,
+        params=params,
     )
     minutes_validation = minutes_booster.predict(x_validation, num_iteration=minutes_best)
     minutes_offset = calibration_offset(minutes_validation, y_minutes_validation)
@@ -211,8 +219,13 @@ def compare_chain(
         minutes_booster.predict(x_test, num_iteration=minutes_best) + minutes_offset, 0.0, None
     )
     minutes_metrics = compute_metrics(
-        list(zip([float(v) for v in minutes_test_pred],
-                 [float(v) for v in y_minutes_test], strict=True)),
+        list(
+            zip(
+                [float(v) for v in minutes_test_pred],
+                [float(v) for v in y_minutes_test],
+                strict=True,
+            )
+        ),
         total_rows=len(test_rows),
     )
 
@@ -245,22 +258,29 @@ def compare_chain(
             f"{MIN_RATE_MINUTES:.0f} minutes excluded from the rate model"
         )
     if len(train_index) < 500:
-        raise ValueError(
-            f"only {len(train_index)} usable rate rows for {target}; too few to fit"
-        )
+        raise ValueError(f"only {len(train_index)} usable rate rows for {target}; too few to fit")
 
     rate_booster, rate_best = _fit(
-        x_train[train_index], y_rate_train,
-        x_validation[validation_index], y_rate_validation,
-        feature_names, weights=w_rate_train, params=params,
+        x_train[train_index],
+        y_rate_train,
+        x_validation[validation_index],
+        y_rate_validation,
+        feature_names,
+        weights=w_rate_train,
+        params=params,
     )
     rate_test_pred = np.clip(rate_booster.predict(x_test, num_iteration=rate_best), 0.0, None)
 
     # Rate accuracy on its own terms, on the test rows where a rate is defined.
     test_index, y_rate_test, _ = rate_arrays(test_rows)
     rate_metrics = compute_metrics(
-        list(zip([float(v) for v in rate_test_pred[test_index]],
-                 [float(v) for v in y_rate_test], strict=True)),
+        list(
+            zip(
+                [float(v) for v in rate_test_pred[test_index]],
+                [float(v) for v in y_rate_test],
+                strict=True,
+            )
+        ),
         total_rows=max(1, len(test_index)),
     )
 
@@ -280,8 +300,13 @@ def compare_chain(
         minutes_test_pred * rate_test_pred / RATE_SCALE + chained_offset, 0.0, None
     )
     chained_metrics = compute_metrics(
-        list(zip([float(v) for v in chained_predictions],
-                 [float(v) for v in y_direct_test], strict=True)),
+        list(
+            zip(
+                [float(v) for v in chained_predictions],
+                [float(v) for v in y_direct_test],
+                strict=True,
+            )
+        ),
         total_rows=len(test_rows),
     )
 

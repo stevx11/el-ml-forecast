@@ -51,7 +51,9 @@ class Season(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     league_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("leagues.id"), nullable=False, index=True
     )
-    code: Mapped[str] = mapped_column(String(32), nullable=False, doc='Provider code, e.g. "E2025".')
+    code: Mapped[str] = mapped_column(
+        String(32), nullable=False, doc='Provider code, e.g. "E2025".'
+    )
     name: Mapped[str] = mapped_column(String(128), nullable=False)
     start_year: Mapped[int] = mapped_column(nullable=False)
     start_date: Mapped[date | None] = mapped_column(nullable=True)

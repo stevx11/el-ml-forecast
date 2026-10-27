@@ -121,14 +121,19 @@ class TestStoredAndScored:
 
         rows = (
             await session.execute(
-                select(Prediction.target, Prediction.predicted_value, Prediction.expected_value)
-                .where(Prediction.game_id == game_id)
+                select(
+                    Prediction.target, Prediction.predicted_value, Prediction.expected_value
+                ).where(Prediction.game_id == game_id)
             )
         ).all()
         points = [r for r in rows if r[0] is PredictionTarget.POINTS]
         assert len(points) == 5
-        assert all(median == 10.0 and expected == pytest.approx(12.0) for _, median, expected in points)
-        assert all(expected is None for target, _, expected in rows if target is PredictionTarget.PLAYS)
+        assert all(
+            median == 10.0 and expected == pytest.approx(12.0) for _, median, expected in points
+        )
+        assert all(
+            expected is None for target, _, expected in rows if target is PredictionTarget.PLAYS
+        )
 
     async def test_team_totals_compare_median_and_expected_with_the_box_score(
         self,
@@ -162,7 +167,9 @@ class TestStoredAndScored:
                         Prediction.target == PredictionTarget.POINTS
                     )
                 )
-            ).scalars().first()
+            )
+            .scalars()
+            .first()
             or {}
         )
         assert bars > 0

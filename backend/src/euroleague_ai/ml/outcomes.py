@@ -92,14 +92,9 @@ class ScoringResult:
 
 def _finished_games(season_code: str | None, as_of: datetime) -> Select[Any]:
     """Games that have finished and could therefore be scored."""
-    stmt = (
-        select(Game.id)
-        .where(Game.status == GameStatus.FINISHED, Game.tip_off_utc < as_of)
-    )
+    stmt = select(Game.id).where(Game.status == GameStatus.FINISHED, Game.tip_off_utc < as_of)
     if season_code:
-        stmt = stmt.join(Season, Season.id == Game.season_id).where(
-            Season.code == season_code
-        )
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
     return stmt
 
 
@@ -143,7 +138,6 @@ async def score_predictions(
     scored_targets.append((PredictionTarget.PLAYS, PlayerGameStats.id))
 
     for target, column in scored_targets:
-
         # LEFT joins throughout: a prediction for a player who never dressed has
         # no box score row at all, and that case must produce a scored zero
         # rather than vanishing from the report.
@@ -170,9 +164,7 @@ async def score_predictions(
                     )
                 ),
             )
-            .outerjoin(
-                PredictionOutcome, PredictionOutcome.prediction_id == Prediction.id
-            )
+            .outerjoin(PredictionOutcome, PredictionOutcome.prediction_id == Prediction.id)
             .where(Prediction.game_id.in_(game_ids), Prediction.target == target)
         )
         if not rescore:
@@ -259,9 +251,7 @@ async def accuracy_report(
             .where(Prediction.target == target)
         )
         if season_code:
-            stmt = stmt.join(Season, Season.id == Game.season_id).where(
-                Season.code == season_code
-            )
+            stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
         if not include_absent:
             stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
 
@@ -486,9 +476,7 @@ async def availability_report(
         .where(Prediction.target == PredictionTarget.PLAYS)
     )
     if season_code:
-        stmt = stmt.join(Season, Season.id == Game.season_id).where(
-            Season.code == season_code
-        )
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
 
     rows = (await session.execute(stmt)).all()
     if not rows:
@@ -524,9 +512,7 @@ async def interval_coverage(
         .where(Prediction.target == target, Prediction.quantiles.isnot(None))
     )
     if season_code:
-        stmt = stmt.join(Season, Season.id == Game.season_id).where(
-            Season.code == season_code
-        )
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
     if not include_absent:
         stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
 
@@ -577,9 +563,7 @@ async def threshold_calibration(
         .where(Prediction.threshold_probabilities.isnot(None))
     )
     if season_code:
-        stmt = stmt.join(Season, Season.id == Game.season_id).where(
-            Season.code == season_code
-        )
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
     if not include_absent:
         stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
 
@@ -624,9 +608,7 @@ async def overall_threshold_calibration(
         .order_by(Prediction.id, plays.created_at.desc())
     )
     if season_code:
-        stmt = stmt.join(Season, Season.id == Game.season_id).where(
-            Season.code == season_code
-        )
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
     return _bands(
         (float(stated) * float(p_plays), float(actual) >= float(threshold))
         for _id, probabilities, actual, p_plays in (await session.execute(stmt)).all()
@@ -682,9 +664,7 @@ async def unscored_games(
         )
     )
     if season_code:
-        stmt = stmt.join(Season, Season.id == Game.season_id).where(
-            Season.code == season_code
-        )
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
     return int((await session.execute(stmt)).scalar_one() or 0)
 
 

@@ -32,7 +32,9 @@ _DC_NS = "{http://purl.org/dc/elements/1.1/}"
 #: Tags that end a line of text. Keeping paragraph breaks matters downstream:
 #: injury extraction works sentence by sentence, and a paragraph boundary is the
 #: most reliable sentence boundary there is.
-_BLOCK_TAGS = frozenset({"p", "br", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr"})
+_BLOCK_TAGS = frozenset(
+    {"p", "br", "div", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr"}
+)
 
 
 class _TextExtractor(HTMLParser):

@@ -177,9 +177,7 @@ async def run_daily(
     return result
 
 
-async def _step_ingest(
-    session: AsyncSession, *, season: str, clock: Clock
-) -> StepResult:
+async def _step_ingest(session: AsyncSession, *, season: str, clock: Clock) -> StepResult:
     """Pull fixtures, rosters and any new box scores for the current season."""
     from euroleague_ai.ingestion.jobs import ingest_all
     from euroleague_ai.providers.factory import build_provider, season_ref
@@ -191,12 +189,10 @@ async def _step_ingest(
     # and retrying at the next slot is strictly better than waiting.
     provider = build_provider(settings, wait_out_cooldowns=False)
     try:
-        summary = await ingest_all(
-            session, provider, season_ref(season, settings), clock=clock
-        )
+        summary = await ingest_all(session, provider, season_ref(season, settings), clock=clock)
         await session.commit()
         return StepResult("ingest", True, detail={"summary": str(summary)})
-    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+    except Exception as exc:
         await session.rollback()
         logger.warning("pipeline ingest failed", extra={"error": str(exc)})
         # Deliberately not re-raised. A provider cooldown is a routine event and
@@ -214,7 +210,7 @@ async def _step_score(session: AsyncSession, *, season: str, clock: Clock) -> St
         scored = await score_predictions(session, season_code=season, clock=clock)
         await session.commit()
         return StepResult("score", True, detail=scored.as_dict())
-    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+    except Exception as exc:
         await session.rollback()
         logger.warning("pipeline scoring failed", extra={"error": str(exc)})
         return StepResult("score", False, error=str(exc))
@@ -230,7 +226,7 @@ async def _step_injury_report(
         imported = await collect_injury_report(session, settings=settings, now=clock.now())
         await session.commit()
         return StepResult("injury_report", True, detail=imported.as_dict())
-    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+    except Exception as exc:
         await session.rollback()
         logger.warning("pipeline injury report failed", extra={"error": str(exc)})
         # Not fatal: predictions still run on the reports already stored.
@@ -245,7 +241,7 @@ async def _step_news(session: AsyncSession, *, settings: Settings, clock: Clock)
         collected = await collect_news(session, settings=settings, now=clock.now())
         await session.commit()
         return StepResult("news", True, detail=collected.as_dict())
-    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+    except Exception as exc:
         await session.rollback()
         logger.warning("pipeline news collection failed", extra={"error": str(exc)})
         # Not fatal: predictions still run on the reports already stored.
@@ -268,7 +264,7 @@ async def _step_predict(
             # and should show up as a failed step rather than a quiet success.
             return StepResult("predict", False, error=str(predicted["error"]))
         return StepResult("predict", True, detail=predicted)
-    except Exception as exc:  # noqa: BLE001 - recorded, not swallowed
+    except Exception as exc:
         await session.rollback()
         logger.warning("pipeline prediction failed", extra={"error": str(exc)})
         return StepResult("predict", False, error=str(exc))

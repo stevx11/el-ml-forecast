@@ -129,12 +129,8 @@ def summarise_team(lines: list[TeamGameLine], prefix: str) -> dict[str, float | 
         f"{prefix}_pace": _round(sum(paces) / len(paces)) if paces else None,
         f"{prefix}_points_scored": _round(scored / count),
         f"{prefix}_points_allowed": _round(allowed / count),
-        f"{prefix}_oreb_per_game": _round(
-            sum(line.offensive_rebounds for line in window) / count
-        ),
-        f"{prefix}_dreb_per_game": _round(
-            sum(line.defensive_rebounds for line in window) / count
-        ),
+        f"{prefix}_oreb_per_game": _round(sum(line.offensive_rebounds for line in window) / count),
+        f"{prefix}_dreb_per_game": _round(sum(line.defensive_rebounds for line in window) / count),
         f"{prefix}_turnovers_per_game": _round(sum(line.turnovers for line in window) / count),
         f"{prefix}_fg3a_per_game": _round(sum(line.fg3a for line in window) / count),
         f"{prefix}_fta_per_game": _round(sum(line.fta for line in window) / count),
@@ -179,9 +175,7 @@ async def build_team_context_features(
     # not a club of unknown strength, it is last season's club minus whoever
     # left. Falling back to recent history beats handing the model nulls for
     # every fixture until November.
-    own = await teams.recent_games(
-        team_id, as_of=as_of, limit=SEASON_WINDOW, season_id=season_id
-    )
+    own = await teams.recent_games(team_id, as_of=as_of, limit=SEASON_WINDOW, season_id=season_id)
     if len(own) < MIN_SEASON_GAMES:
         own = await teams.recent_games(team_id, as_of=as_of, limit=SEASON_WINDOW)
 
@@ -189,9 +183,7 @@ async def build_team_context_features(
         opponent_team_id, as_of=as_of, limit=SEASON_WINDOW, season_id=season_id
     )
     if len(opponent) < MIN_SEASON_GAMES:
-        opponent = await teams.recent_games(
-            opponent_team_id, as_of=as_of, limit=SEASON_WINDOW
-        )
+        opponent = await teams.recent_games(opponent_team_id, as_of=as_of, limit=SEASON_WINDOW)
 
     features: dict[str, float | None] = {}
     features.update(summarise_team(own, "team"))

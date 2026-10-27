@@ -138,7 +138,8 @@ def matrix_summary(x: np.ndarray, feature_names: Sequence[str]) -> dict[str, Any
 
     missing_fraction = np.isnan(x).mean(axis=0)
     all_missing = [
-        name for name, fraction in zip(feature_names, missing_fraction, strict=True)
+        name
+        for name, fraction in zip(feature_names, missing_fraction, strict=True)
         if fraction == 1.0
     ]
     mostly_missing = [

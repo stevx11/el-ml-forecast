@@ -46,7 +46,7 @@ class TestPredictionTimestamp:
 
     def test_naive_tip_off_is_rejected(self) -> None:
         with pytest.raises(ValueError, match="timezone-aware"):
-            default_prediction_timestamp(datetime(2025, 10, 31, 18, 0))
+            default_prediction_timestamp(datetime(2025, 10, 31, 18, 0))  # noqa: DTZ001 - deliberately naive
 
 
 class TestSnapshots:

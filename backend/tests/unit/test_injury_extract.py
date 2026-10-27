@@ -29,10 +29,22 @@ OUT, Q, D, OK, SUSP = (
 )
 
 NAMES = [
-    "FOURNIER, EVAN", "DORSEY, TYLER", "MONTERO, JEAN", "HIFI, NADIR", "YILMAZ, ERKAN",
-    "RIVERO, JASIEL", "FORREST, TRENT", "JAMES, MIKE", "HEZONJA, MARIO", "LESSORT, MATHIAS",
-    "SLOUKAS, KOSTAS", "WALKUP, THOMAS", "MILUTINOV, NIKOLA", "VEZENKOV, SASHA",
-    "MILLER-MCINTYRE, CODI", "ŠARIĆ, DARIO",
+    "FOURNIER, EVAN",
+    "DORSEY, TYLER",
+    "MONTERO, JEAN",
+    "HIFI, NADIR",
+    "YILMAZ, ERKAN",
+    "RIVERO, JASIEL",
+    "FORREST, TRENT",
+    "JAMES, MIKE",
+    "HEZONJA, MARIO",
+    "LESSORT, MATHIAS",
+    "SLOUKAS, KOSTAS",
+    "WALKUP, THOMAS",
+    "MILUTINOV, NIKOLA",
+    "VEZENKOV, SASHA",
+    "MILLER-MCINTYRE, CODI",
+    "ŠARIĆ, DARIO",
 ]
 
 
@@ -42,18 +54,36 @@ def index() -> RosterIndex:
 
 
 def _read(text: str, index: RosterIndex) -> dict[str, tuple[AvailabilityStatus, float, bool]]:
-    return {e.full_name: (e.status, e.confidence, e.rules_out) for e in extract_statuses(text, index)}
+    return {
+        e.full_name: (e.status, e.confidence, e.rules_out) for e in extract_statuses(text, index)
+    }
 
 
 class TestPhrases:
     @pytest.mark.parametrize(
         ("sentence", "name", "status"),
         [
-            ("Nadir Hifi is ruled out for Paris's game at Olympiacos on Friday, the club has confirmed.", "HIFI, NADIR", OUT),
-            ("Erkan Yilmaz is out for the next three weeks with a left knee injury.", "YILMAZ, ERKAN", OUT),
-            ("Jasiel Rivero hurt his foot and is expected to be sidelined for several months.", "RIVERO, JASIEL", OUT),
+            (
+                "Nadir Hifi is ruled out for Paris's game at Olympiacos on Friday, the club has confirmed.",
+                "HIFI, NADIR",
+                OUT,
+            ),
+            (
+                "Erkan Yilmaz is out for the next three weeks with a left knee injury.",
+                "YILMAZ, ERKAN",
+                OUT,
+            ),
+            (
+                "Jasiel Rivero hurt his foot and is expected to be sidelined for several months.",
+                "RIVERO, JASIEL",
+                OUT,
+            ),
             ("Trent Forrest (hamstring) has been out since October 17.", "FORREST, TRENT", OUT),
-            ("Mathias Lessort, who hurt his ankle on Tuesday, will not play against Real.", "LESSORT, MATHIAS", OUT),
+            (
+                "Mathias Lessort, who hurt his ankle on Tuesday, will not play against Real.",
+                "LESSORT, MATHIAS",
+                OUT,
+            ),
             ("Mike James will be a game-time decision.", "JAMES, MIKE", Q),
             ("Kostas Sloukas is day-to-day with back spasms.", "SLOUKAS, KOSTAS", Q),
             ("Mario Hezonja is doubtful for Thursday.", "HEZONJA, MARIO", D),
@@ -62,7 +92,9 @@ class TestPhrases:
             ("Dario Šarić has been suspended for one game.", "ŠARIĆ, DARIO", SUSP),
         ],
     )
-    def test_reads_the_status(self, sentence: str, name: str, status: AvailabilityStatus, index: RosterIndex) -> None:
+    def test_reads_the_status(
+        self, sentence: str, name: str, status: AvailabilityStatus, index: RosterIndex
+    ) -> None:
         assert _read(sentence, index)[name][0] is status
 
     def test_strong_outs_rule_the_player_out(self, index: RosterIndex) -> None:
@@ -102,7 +134,9 @@ class TestClausesAndGuards:
         assert result["HEZONJA, MARIO"][0] is OK
 
     def test_past_tense_alone_is_not_confident_enough(self, index: RosterIndex) -> None:
-        status, confidence, rules_out = _read("Mario Hezonja was ruled out of the last game.", index)["HEZONJA, MARIO"]
+        status, confidence, rules_out = _read(
+            "Mario Hezonja was ruled out of the last game.", index
+        )["HEZONJA, MARIO"]
         assert status is OUT and confidence < 0.8 and not rules_out
 
     def test_surname_counts_only_after_a_full_mention(self, index: RosterIndex) -> None:
@@ -116,7 +150,11 @@ class TestClausesAndGuards:
         assert _read("Dario Saric is ruled out.", index)["ŠARIĆ, DARIO"][0] is OUT
 
     def test_sentences_split_on_paragraphs_and_stops(self) -> None:
-        assert split_sentences("One is out. Two is back!\nThree") == ["One is out.", "Two is back!", "Three"]
+        assert split_sentences("One is out. Two is back!\nThree") == [
+            "One is out.",
+            "Two is back!",
+            "Three",
+        ]
 
 
 SAMPLE_FEED = """<?xml version="1.0" encoding="UTF-8"?>
@@ -149,7 +187,10 @@ class TestFeeds:
         assert html_to_text("") is None
 
     def test_source_key_is_readable_and_bounded(self) -> None:
-        assert source_key("https://www.eurohoops.net/en/euroleague/feed/") == "www.eurohoops.net/en/euroleague/feed"
+        assert (
+            source_key("https://www.eurohoops.net/en/euroleague/feed/")
+            == "www.eurohoops.net/en/euroleague/feed"
+        )
         assert len(source_key("https://x.test/" + "a" * 200)) == 64
 
 
@@ -158,8 +199,15 @@ def _news_report(confidence: float) -> StatusReport:
 
     at = datetime(2026, 10, 20, tzinfo=UTC)
     return StatusReport(
-        id=uuid.uuid4(), player_id=uuid.uuid4(), game_id=None, status=OUT, reason="is out",
-        expected_return=None, source=StatusSourceType.NEWS, event_timestamp=at, observed_at=at,
+        id=uuid.uuid4(),
+        player_id=uuid.uuid4(),
+        game_id=None,
+        status=OUT,
+        reason="is out",
+        expected_return=None,
+        source=StatusSourceType.NEWS,
+        event_timestamp=at,
+        observed_at=at,
         confidence=confidence,
     )
 
@@ -169,8 +217,12 @@ class TestNewsThreshold:
         from datetime import UTC, datetime
 
         tip = datetime(2026, 10, 23, tzinfo=UTC)
-        strong = resolve_status([_news_report(0.85)], game_id=uuid.uuid4(), tip_off=tip, last_played=None)
-        weak = resolve_status([_news_report(0.7)], game_id=uuid.uuid4(), tip_off=tip, last_played=None)
+        strong = resolve_status(
+            [_news_report(0.85)], game_id=uuid.uuid4(), tip_off=tip, last_played=None
+        )
+        weak = resolve_status(
+            [_news_report(0.7)], game_id=uuid.uuid4(), tip_off=tip, last_played=None
+        )
         assert strong is not None and strong.rules_out and strong.as_dict()["applied"] is True
         assert weak is not None and not weak.rules_out and weak.as_dict()["applied"] is False
 
@@ -179,19 +231,35 @@ class TestNewsThreshold:
 # misread by the first rules: an old injury kept a player out, or a one-game
 # report lingered past that game.
 REAL_NAMES = [
-    "MINAYA, JUSTIN", "MAKOUNDOU, YOAN", "JAMES, MIKE", "CORDINIER, ISAIA",
-    "PAPAGIANNIS, GEORGIOS", "MOTLEY, JOHNATHAN", "IZUNDU, EBUKA", "MILJENOVIC, STEFAN",
-    "NTILIKINA, FRANK", "WILLIAMS-GOSS, NIGEL", "LUNDBERG, IFFE", "FOURNIER, EVAN",
-    "MONTERO, JEAN", "DORSEY, TYLER", "WILLIS, DEREK", "BONGA, ISAAC",
+    "MINAYA, JUSTIN",
+    "MAKOUNDOU, YOAN",
+    "JAMES, MIKE",
+    "CORDINIER, ISAIA",
+    "PAPAGIANNIS, GEORGIOS",
+    "MOTLEY, JOHNATHAN",
+    "IZUNDU, EBUKA",
+    "MILJENOVIC, STEFAN",
+    "NTILIKINA, FRANK",
+    "WILLIAMS-GOSS, NIGEL",
+    "LUNDBERG, IFFE",
+    "FOURNIER, EVAN",
+    "MONTERO, JEAN",
+    "DORSEY, TYLER",
+    "WILLIS, DEREK",
+    "BONGA, ISAAC",
 ]
 
 
 @pytest.fixture(scope="module")
 def real() -> RosterIndex:
-    return RosterIndex([RosterPlayer(uuid.uuid4(), n, uuid.uuid4(), "XXX", None) for n in REAL_NAMES])
+    return RosterIndex(
+        [RosterPlayer(uuid.uuid4(), n, uuid.uuid4(), "XXX", None) for n in REAL_NAMES]
+    )
 
 
-def _scoped(text: str, index: RosterIndex) -> dict[str, tuple[AvailabilityStatus, bool, str, int | None]]:
+def _scoped(
+    text: str, index: RosterIndex
+) -> dict[str, tuple[AvailabilityStatus, bool, str, int | None]]:
     return {
         e.full_name: (e.status, e.rules_out, e.scope, e.duration_days)
         for e in extract_statuses(text, index)
@@ -205,10 +273,9 @@ class TestScope:
             "for Efes’s game at Zalgiris on Friday, the club has confirmed.",
             real,
         )
-        assert {name: r[:3] for name, r in result.items()} == {
-            name: (OUT, True, "game")
-            for name in ("JAMES, MIKE", "CORDINIER, ISAIA", "PAPAGIANNIS, GEORGIOS")
-        }
+        assert {name: r[:3] for name, r in result.items()} == dict.fromkeys(
+            ("JAMES, MIKE", "CORDINIER, ISAIA", "PAPAGIANNIS, GEORGIOS"), (OUT, True, "game")
+        )
 
     def test_upgrade_wins_over_the_out_beside_it(self, real: RosterIndex) -> None:
         result = _scoped(
@@ -232,8 +299,16 @@ class TestScope:
     @pytest.mark.parametrize(
         ("sentence", "name", "days"),
         [
-            ("Iffe Lundberg suffers an injury and will be sidelined for 6 to 8 weeks", "LUNDBERG, IFFE", 42),
-            ("Evan Fournier set to miss 20 days, Jean Montero questionable for Fenerbahce", "FOURNIER, EVAN", 20),
+            (
+                "Iffe Lundberg suffers an injury and will be sidelined for 6 to 8 weeks",
+                "LUNDBERG, IFFE",
+                42,
+            ),
+            (
+                "Evan Fournier set to miss 20 days, Jean Montero questionable for Fenerbahce",
+                "FOURNIER, EVAN",
+                20,
+            ),
         ],
     )
     def test_a_stated_absence_lasts_its_lower_bound(
@@ -242,7 +317,9 @@ class TestScope:
         assert _scoped(sentence, real)[name] == (OUT, True, "until", days)
 
     def test_the_other_name_in_a_headline_keeps_its_own_status(self, real: RosterIndex) -> None:
-        result = _scoped("Evan Fournier set to miss 20 days, Jean Montero questionable for Fenerbahce", real)
+        result = _scoped(
+            "Evan Fournier set to miss 20 days, Jean Montero questionable for Fenerbahce", real
+        )
         assert result["MONTERO, JEAN"] == (Q, False, "open", None)
 
     def test_a_plain_out_is_open(self, real: RosterIndex) -> None:
@@ -255,13 +332,19 @@ class TestBackground:
     @pytest.mark.parametrize(
         ("sentence", "name"),
         [
-            ("Justin Minaya played the first three rounds of the season, but ahead of Round 4, it "
-             "was communicated that he will be out for approximately 10 days with a calf issue.",
-             "MINAYA, JUSTIN"),
-            ("Frank Ntilikina last played in Round 2 and was ruled out for Round 5 with muscle pain.",
-             "NTILIKINA, FRANK"),
-            ("Nigel Williams-Goss was ruled out for two weeks with a hamstring injury on September 25.",
-             "WILLIAMS-GOSS, NIGEL"),
+            (
+                "Justin Minaya played the first three rounds of the season, but ahead of Round 4, it "
+                "was communicated that he will be out for approximately 10 days with a calf issue.",
+                "MINAYA, JUSTIN",
+            ),
+            (
+                "Frank Ntilikina last played in Round 2 and was ruled out for Round 5 with muscle pain.",
+                "NTILIKINA, FRANK",
+            ),
+            (
+                "Nigel Williams-Goss was ruled out for two weeks with a hamstring injury on September 25.",
+                "WILLIAMS-GOSS, NIGEL",
+            ),
         ],
     )
     def test_recaps_do_not_rule_out(self, sentence: str, name: str, real: RosterIndex) -> None:
@@ -281,9 +364,18 @@ class TestBackground:
 # Nunn out for a game he played 20 minutes in: "Kendrick Nunn" alone before the
 # comma borrowed "ruled out" from across "while".
 R7_NAMES = [
-    "NUNN, KENDRICK", "SLOUKAS, KOSTAS", "BONGA, ISAAC", "ROGKAVOPOULOS, NIKOS",
-    "MANTZOUKAS, LEFTERIS", "WALKER, LONNIE", "JEFFRIES, DAQUAN", "STEVENS, LAMAR",
-    "JEKIRI, TONYE", "MARINKOVIC, VANJA", "WILLIS, DEREK", "MILJENOVIC, STEFAN",
+    "NUNN, KENDRICK",
+    "SLOUKAS, KOSTAS",
+    "BONGA, ISAAC",
+    "ROGKAVOPOULOS, NIKOS",
+    "MANTZOUKAS, LEFTERIS",
+    "WALKER, LONNIE",
+    "JEFFRIES, DAQUAN",
+    "STEVENS, LAMAR",
+    "JEKIRI, TONYE",
+    "MARINKOVIC, VANJA",
+    "WILLIS, DEREK",
+    "MILJENOVIC, STEFAN",
 ]
 
 
@@ -316,12 +408,16 @@ class TestContrastWords:
     @pytest.mark.parametrize(
         ("sentence", "name"),
         [
-            ("Lamar Stevens available once again while Tonye Jekiri, Vanja Marinkovic and Derek "
-             "Willis are ruled out for Partizan’s game against Crvena Zvezda on Thursday.",
-             "STEVENS, LAMAR"),
-            ("Lonnie Walker is listed as available ahead of his possible debut while DaQuan "
-             "Jeffries remains sidelined for Besiktas’s game at Efes on Thursday.",
-             "WALKER, LONNIE"),
+            (
+                "Lamar Stevens available once again while Tonye Jekiri, Vanja Marinkovic and Derek "
+                "Willis are ruled out for Partizan’s game against Crvena Zvezda on Thursday.",
+                "STEVENS, LAMAR",
+            ),
+            (
+                "Lonnie Walker is listed as available ahead of his possible debut while DaQuan "
+                "Jeffries remains sidelined for Besiktas’s game at Efes on Thursday.",
+                "WALKER, LONNIE",
+            ),
         ],
     )
     def test_more_ways_of_saying_available(self, sentence: str, name: str, r7: RosterIndex) -> None:

@@ -22,7 +22,7 @@ import re
 from pathlib import Path
 
 import pytest
-from sqlalchemy import CheckConstraint, ForeignKeyConstraint, Index, UniqueConstraint
+from sqlalchemy import CheckConstraint, ForeignKeyConstraint, UniqueConstraint
 
 # euroleague_ai.models must be imported for its tables to register on the metadata.
 import euroleague_ai.models  # noqa: F401
@@ -71,8 +71,7 @@ class TestOrmIdentifiers:
         ]
 
         assert not offenders, "identifiers exceeding PostgreSQL's 63-byte limit:\n" + "\n".join(
-            f"  {table}.{kind}: {name} ({length} chars, over by "
-            f"{length - MAX_IDENTIFIER_LENGTH})"
+            f"  {table}.{kind}: {name} ({length} chars, over by {length - MAX_IDENTIFIER_LENGTH})"
             for table, kind, name, length in offenders
         )
 
@@ -110,9 +109,7 @@ class TestMigrationIdentifiers:
         instance methods -- each test gets a fresh instance while the fixture runs
         once, so anything set on ``self`` would silently vanish.
         """
-        return "\n".join(
-            path.read_text(encoding="utf-8") for path in MIGRATIONS_DIR.glob("*.py")
-        )
+        return "\n".join(path.read_text(encoding="utf-8") for path in MIGRATIONS_DIR.glob("*.py"))
 
     def test_no_migration_identifier_is_too_long(self, migration_sources: str) -> None:
         names = set(re.findall(r'name="([a-z0-9_]+)"', migration_sources))
@@ -130,9 +127,7 @@ class TestMigrationIdentifiers:
             f"  {name} ({len(name)} chars)" for name in offenders
         )
 
-    def test_migration_and_orm_agree_on_the_shortened_name(
-        self, migration_sources: str
-    ) -> None:
+    def test_migration_and_orm_agree_on_the_shortened_name(self, migration_sources: str) -> None:
         """Both sides must carry the same explicit name, or the schema drifts."""
         assert "fk_predictions_player_feature_snapshot_id" in migration_sources
         assert (

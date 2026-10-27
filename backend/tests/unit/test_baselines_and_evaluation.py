@@ -12,7 +12,6 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from euroleague_ai.models.enums import PredictionTarget
 from euroleague_ai.ml.baselines import (
     LastNMean,
     MinutesScaledRate,
@@ -28,6 +27,7 @@ from euroleague_ai.ml.evaluation import (
     stratified_metrics,
     walk_forward_folds,
 )
+from euroleague_ai.models.enums import PredictionTarget
 
 BASE = datetime(2025, 10, 1, 18, 0, tzinfo=UTC)
 
@@ -179,8 +179,11 @@ class TestBaselines:
 
     def test_zero_season_minutes_does_not_divide_by_zero(self) -> None:
         r = row(
-            features={"season_points_mean": 5.0, "season_minutes_mean": 0.0,
-                      "last5_minutes_mean": 10.0},
+            features={
+                "season_points_mean": 5.0,
+                "season_minutes_mean": 0.0,
+                "last5_minutes_mean": 10.0,
+            },
             target=8.0,
         )
         assert MinutesScaledRate().predict(r, self.TARGET) is None
@@ -198,17 +201,14 @@ class TestBaselines:
 class TestWalkForward:
     def test_train_is_strictly_earlier_than_test(self) -> None:
         """The property the whole harness exists to guarantee."""
-        rows = [
-            row(features={}, target=float(r), round_number=r, day=r)
-            for r in range(1, 11)
-        ]
+        rows = [row(features={}, target=float(r), round_number=r, day=r) for r in range(1, 11)]
         folds = walk_forward_folds(rows, min_train_rounds=5)
 
         assert folds
         for fold in folds:
-            assert all(
-                train.round_number < fold.round_number for train in fold.train
-            ), "a training row is not earlier than the fold it trains for"
+            assert all(train.round_number < fold.round_number for train in fold.train), (
+                "a training row is not earlier than the fold it trains for"
+            )
 
     def test_early_rounds_are_not_evaluated(self) -> None:
         """Form windows are empty there; evaluating them measures missingness."""
@@ -248,19 +248,51 @@ class TestWalkForward:
 class TestCompare:
     def test_ranks_by_mae_best_first(self) -> None:
         results = {
-            "worse": {"overall": {"mae": 5.0, "rmse": 6.0, "r2": 0.1, "bias": 0.0,
-                                  "coverage": 1.0, "n": 10}},
-            "better": {"overall": {"mae": 3.0, "rmse": 4.0, "r2": 0.4, "bias": 0.0,
-                                   "coverage": 1.0, "n": 10}},
+            "worse": {
+                "overall": {
+                    "mae": 5.0,
+                    "rmse": 6.0,
+                    "r2": 0.1,
+                    "bias": 0.0,
+                    "coverage": 1.0,
+                    "n": 10,
+                }
+            },
+            "better": {
+                "overall": {
+                    "mae": 3.0,
+                    "rmse": 4.0,
+                    "r2": 0.4,
+                    "bias": 0.0,
+                    "coverage": 1.0,
+                    "n": 10,
+                }
+            },
         }
         assert [entry["predictor"] for entry in compare(results)] == ["better", "worse"]
 
     def test_uncovered_predictor_cannot_top_the_table(self) -> None:
         """NaN must sort last, not first."""
         results = {
-            "real": {"overall": {"mae": 3.0, "rmse": 4.0, "r2": 0.4, "bias": 0.0,
-                                 "coverage": 1.0, "n": 10}},
-            "empty": {"overall": {"mae": math.nan, "rmse": math.nan, "r2": math.nan,
-                                  "bias": math.nan, "coverage": 0.0, "n": 0}},
+            "real": {
+                "overall": {
+                    "mae": 3.0,
+                    "rmse": 4.0,
+                    "r2": 0.4,
+                    "bias": 0.0,
+                    "coverage": 1.0,
+                    "n": 10,
+                }
+            },
+            "empty": {
+                "overall": {
+                    "mae": math.nan,
+                    "rmse": math.nan,
+                    "r2": math.nan,
+                    "bias": math.nan,
+                    "coverage": 0.0,
+                    "n": 0,
+                }
+            },
         }
         assert compare(results)[0]["predictor"] == "real"

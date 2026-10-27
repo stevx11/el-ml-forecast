@@ -35,7 +35,7 @@ class Base(DeclarativeBase):
     # Every datetime column in this schema is timezone-aware. Enforcing it here
     # means no individual model can forget and introduce a naive column, which
     # would break time-ordered comparisons in ways that are painful to detect.
-    type_annotation_map = {
+    type_annotation_map = {  # noqa: RUF012 - SQLAlchemy reads it as a plain class attribute
         datetime: DateTime(timezone=True),
         dict[str, Any]: JSONB,
         list[str]: JSONB,

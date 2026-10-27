@@ -73,9 +73,7 @@ async def store_articles(
     source = await ensure_source(session, feed_url)
     urls = [a.url for a in articles]
     known = set(
-        (
-            await session.execute(select(NewsArticle.url).where(NewsArticle.url.in_(urls)))
-        ).scalars()
+        (await session.execute(select(NewsArticle.url).where(NewsArticle.url.in_(urls)))).scalars()
     )
     known_hashes = set(
         (

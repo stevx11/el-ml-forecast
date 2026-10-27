@@ -87,9 +87,7 @@ class PlayerTeamStint(Base, UUIDPrimaryKeyMixin, ObservedMixin, EffectiveMixin, 
     )
 
     jersey_number: Mapped[str | None] = mapped_column(String(8), nullable=True)
-    position: Mapped[PlayerPosition] = mapped_column(
-        default=PlayerPosition.UNKNOWN, nullable=False
-    )
+    position: Mapped[PlayerPosition] = mapped_column(default=PlayerPosition.UNKNOWN, nullable=False)
     is_active: Mapped[bool] = mapped_column(
         default=True,
         nullable=False,

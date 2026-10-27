@@ -18,14 +18,14 @@ from contextlib import asynccontextmanager
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from euroleague_ai.core.clock import Clock, SystemClock
-from euroleague_ai.core.logging import get_logger, set_correlation_id
 from euroleague_ai.core.errors import ProviderError
+from euroleague_ai.core.logging import get_logger, set_correlation_id
+from euroleague_ai.ingestion.identity import IdentityResolver
+from euroleague_ai.ingestion.pipeline import IngestionPipeline, IngestionResult
 from euroleague_ai.models.enums import IngestionStatus
 from euroleague_ai.models.ingestion import IngestionRun
 from euroleague_ai.providers.base import BasketballDataProvider, SeasonRef
 from euroleague_ai.providers.euroleague import RateLimitCooldown
-from euroleague_ai.ingestion.identity import IdentityResolver
-from euroleague_ai.ingestion.pipeline import IngestionPipeline, IngestionResult
 
 logger = get_logger(__name__)
 
@@ -92,9 +92,7 @@ async def _prepare(
     resolver = IdentityResolver(session, provider.provider_key, clock=clock)
     pipeline = IngestionPipeline(session, resolver, clock=clock)
     league = await pipeline.ensure_league()
-    season = await pipeline.ensure_season(
-        league, season_ref.season_code, season_ref.start_year
-    )
+    season = await pipeline.ensure_season(league, season_ref.season_code, season_ref.start_year)
     return pipeline, season
 
 

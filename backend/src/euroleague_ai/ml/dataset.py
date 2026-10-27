@@ -144,7 +144,10 @@ async def load_training_rows(
         )
         .join(Game, Game.id == PlayerFeatureSnapshot.game_id)
         .join(Season, Season.id == Game.season_id)
-        .join(GameTeam, (GameTeam.game_id == Game.id) & (GameTeam.team_id == PlayerFeatureSnapshot.team_id))
+        .join(
+            GameTeam,
+            (GameTeam.game_id == Game.id) & (GameTeam.team_id == PlayerFeatureSnapshot.team_id),
+        )
         .join(
             PlayerGameStats,
             (PlayerGameStats.game_team_id == GameTeam.id)

@@ -210,10 +210,8 @@ def search(
             mae, best_iteration = _validation_mae(
                 train_rows, validation_rows, feature_names, params
             )
-        except Exception as exc:  # noqa: BLE001 - a bad draw must not end the search
-            logger.warning(
-                "trial failed", extra={"target": str(target), "error": str(exc)}
-            )
+        except Exception as exc:
+            logger.warning("trial failed", extra={"target": str(target), "error": str(exc)})
             continue
 
         results.append(Trial(params=params, validation_mae=mae, best_iteration=best_iteration))
@@ -262,9 +260,7 @@ def save_params(
     return path
 
 
-def load_params(
-    target: PredictionTarget, *, root: Path | None = None
-) -> dict[str, Any] | None:
+def load_params(target: PredictionTarget, *, root: Path | None = None) -> dict[str, Any] | None:
     """Tuned parameters for a target, or ``None`` if the search never ran.
 
     Returning ``None`` rather than the defaults keeps the caller able to say

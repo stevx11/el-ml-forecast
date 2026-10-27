@@ -108,9 +108,7 @@ def team_key(row: TrainingRow) -> tuple[Any, Any]:
     return (row.game_id, row.features.get("is_home"))
 
 
-def team_total_error(
-    predictions: Sequence[float], rows: Sequence[TrainingRow]
-) -> dict[str, float]:
+def team_total_error(predictions: Sequence[float], rows: Sequence[TrainingRow]) -> dict[str, float]:
     """Error in summed squad totals, per team-game.
 
     ``bias`` is predicted minus actual, matching

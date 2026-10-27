@@ -35,7 +35,9 @@ from euroleague_ai.core.clock import Clock, SystemClock
 from euroleague_ai.core.config import Settings, get_settings
 from euroleague_ai.core.errors import NotFoundError
 from euroleague_ai.core.logging import get_logger
+from euroleague_ai.features.injury_status import ResolvedStatus, resolve_status
 from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features, can_serve
+from euroleague_ai.features.snapshot import default_prediction_timestamp
 from euroleague_ai.ml.distribution import ResidualDistribution, threshold_cutoff, thresholds_for
 from euroleague_ai.ml.expectation import (
     SOURCE_BOOSTER,
@@ -44,21 +46,18 @@ from euroleague_ai.ml.expectation import (
     shifted_median,
 )
 from euroleague_ai.ml.explain import PLAYS_MIN_IMPACT, PLAYS_PHRASES, explain_prediction
-from euroleague_ai.ml.registry import distribution_path, expectation_paths
-from euroleague_ai.features.snapshot import default_prediction_timestamp
-from euroleague_ai.models.enums import GameStatus, PredictionTarget, StatusSourceType
-from euroleague_ai.models.features import PlayerFeatureSnapshot
-from euroleague_ai.models.game import Game
-from euroleague_ai.models.prediction import ModelVersion, Prediction
 from euroleague_ai.ml.matrix import features_to_matrix
-from euroleague_ai.ml.registry import active_model
 from euroleague_ai.ml.reconcile import MinutesReconciliation, load_reconciliation
+from euroleague_ai.ml.registry import active_model, distribution_path, expectation_paths
 from euroleague_ai.ml.squad_stats import (
     STAT_TARGETS,
     StatsReconciliation,
     load_stats_reconciliation,
 )
-from euroleague_ai.features.injury_status import ResolvedStatus, resolve_status
+from euroleague_ai.models.enums import GameStatus, PredictionTarget, StatusSourceType
+from euroleague_ai.models.features import PlayerFeatureSnapshot
+from euroleague_ai.models.game import Game
+from euroleague_ai.models.prediction import ModelVersion, Prediction
 from euroleague_ai.repositories.availability import last_appearances, status_reports
 from euroleague_ai.repositories.rosters import candidate_players, current_club
 
@@ -133,9 +132,7 @@ class LoadedModel:
         """``True`` for the play-probability classifier, whose output is P(plays)."""
         return self.target is PredictionTarget.PLAYS
 
-    def explain_batch(
-        self, feature_dicts: list[dict[str, Any]]
-    ) -> list[dict[str, Any]]:
+    def explain_batch(self, feature_dicts: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """Exact TreeSHAP contributions per row, grouped into readable themes.
 
         Uses LightGBM's own ``pred_contrib``, which is exact for trees and needs
@@ -186,9 +183,7 @@ class LoadedModel:
             )
         return explanations
 
-    def distribution_for(
-        self, predicted: float, features: dict[str, Any]
-    ) -> dict[str, Any]:
+    def distribution_for(self, predicted: float, features: dict[str, Any]) -> dict[str, Any]:
         """Quantiles, threshold probabilities, spread and confidence.
 
         Empty when the model predates the distribution work. Publishing an
@@ -399,9 +394,7 @@ async def predict_game(
             rows.append((player_id, snapshot_id, features))
 
     if not rows:
-        logger.warning(
-            "no candidate players", extra={"game_code": game.game_code}
-        )
+        logger.warning("no candidate players", extra={"game_code": game.game_code})
         return 0
 
     # Cheap invariant, loud failure. If club resolution ever regresses, a player
@@ -445,8 +438,7 @@ async def predict_game(
         if reconciliation.applies_to(models):
             medians, expected_minutes, minute_explanations = computed[PredictionTarget.MINUTES]
             base = [
-                e if e is not None else m
-                for e, m in zip(expected_minutes, medians, strict=True)
+                e if e is not None else m for e, m in zip(expected_minutes, medians, strict=True)
             ]
             reconciled = reconciliation.apply(
                 base,
@@ -513,9 +505,7 @@ async def predict_game(
                         "expected_value": expected,
                         "predicted_std": spread.get("predicted_std"),
                         "quantiles": spread.get("quantiles"),
-                        "threshold_probabilities": spread.get(
-                            "threshold_probabilities"
-                        ),
+                        "threshold_probabilities": spread.get("threshold_probabilities"),
                         "confidence": spread.get("confidence"),
                         "explanation": explanation,
                     },
@@ -599,7 +589,7 @@ def _apply_statuses(
     reinstated late still has a sensible line. The squad totals and minutes
     reconciliation discount him through P(plays) = 0.
     """
-    for target, (values, expected, explanations) in computed.items():
+    for target, (values, _expected, explanations) in computed.items():
         for index, resolved in statuses.items():
             explanation = dict(explanations[index] or {})
             explanation["availability"] = resolved.as_dict()
@@ -677,11 +667,7 @@ async def upcoming_games(
     clock = clock or SystemClock()
     now = clock.now()
 
-    stmt = (
-        select(Game)
-        .where(Game.status == GameStatus.SCHEDULED)
-        .order_by(Game.tip_off_utc)
-    )
+    stmt = select(Game).where(Game.status == GameStatus.SCHEDULED).order_by(Game.tip_off_utc)
     if game_codes:
         stmt = stmt.where(Game.game_code.in_(game_codes))
     else:
@@ -690,9 +676,7 @@ async def upcoming_games(
             Game.tip_off_utc <= now + timedelta(days=within_days),
         )
     if season_code:
-        stmt = stmt.join(Season, Season.id == Game.season_id).where(
-            Season.code == season_code
-        )
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
 
     return list((await session.execute(stmt)).scalars().all())
 
@@ -751,8 +735,13 @@ async def predict_upcoming(
     total = 0
     for index, game in enumerate(games, start=1):
         total += await predict_game(
-            session, game, models, clock=clock, settings=settings,
-            reconciliation=reconciliation, stats_reconciliation=stats_fit,
+            session,
+            game,
+            models,
+            clock=clock,
+            settings=settings,
+            reconciliation=reconciliation,
+            stats_reconciliation=stats_fit,
         )
         await session.commit()
         logger.info(
@@ -765,8 +754,7 @@ async def predict_upcoming(
         "predictions": total,
         "targets": [str(t) for t in models],
         "models": {
-            str(t): f"{m.model_version.name} {m.model_version.version}"
-            for t, m in models.items()
+            str(t): f"{m.model_version.name} {m.model_version.version}" for t, m in models.items()
         },
         "minutes_reconciliation": (
             f"alpha {reconciliation.alpha}, squads to {reconciliation.target_minutes:.1f} min"

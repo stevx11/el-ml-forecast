@@ -179,9 +179,7 @@ class DatasetDiagnostics:
             "missing_snapshots": self.missing_snapshots,
             "wrong_side": self.wrong_side,
             "played_not_candidate": self.played_not_candidate,
-            "candidate_recall": (
-                round(self.played / played_total, 4) if played_total else None
-            ),
+            "candidate_recall": (round(self.played / played_total, 4) if played_total else None),
         }
 
 
@@ -227,10 +225,7 @@ async def _box_score(
     # ``did_not_play`` is the project's one definition of "did not take the
     # floor" (see providers.parsing.is_did_not_play). The candidate filter and the
     # form windows use it too, so the label agrees with both.
-    return {
-        player_id: (team_id, not did_not_play)
-        for player_id, team_id, did_not_play in rows
-    }
+    return {player_id: (team_id, not did_not_play) for player_id, team_id, did_not_play in rows}
 
 
 async def _snapshots(
@@ -741,9 +736,7 @@ def _groups(rows: Sequence[AvailabilityRow]) -> list[tuple[uuid.UUID, uuid.UUID]
     return [(row.game_id, row.team_id) for row in rows]
 
 
-def _by_outcome(
-    rows: Sequence[AvailabilityRow], probabilities: Sequence[float]
-) -> dict[str, Any]:
+def _by_outcome(rows: Sequence[AvailabilityRow], probabilities: Sequence[float]) -> dict[str, Any]:
     """Mean predicted probability for each realised outcome.
 
     A model that separates the cases should give clearly lower numbers to

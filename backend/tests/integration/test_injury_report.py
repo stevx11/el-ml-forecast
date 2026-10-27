@@ -147,7 +147,10 @@ class TestConfirmation:
         assert all(partizan in f.team_ids for f in fetches)
 
     async def test_a_misread_news_out_loses_to_the_table_fetched_after_it(
-        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef,
+        self,
+        session: AsyncSession,
+        fixture_provider: FixtureProvider,
+        season: SeasonRef,
         settings: Settings,
     ) -> None:
         """The Nunn case: the table says ready on Monday, a misread article says
@@ -157,17 +160,27 @@ class TestConfirmation:
         martinez = await _id(session, EntityType.PLAYER, "012002")
         session.add(
             PlayerStatusEvent(
-                player_id=martinez, team_id=await _id(session, EntityType.TEAM, "MAD"),
-                game_id=(await _game(session, 5)).id, status=AvailabilityStatus.OUT,
-                source_type=StatusSourceType.NEWS, confidence=0.85, reason="ruled out",
-                event_timestamp=TUESDAY - timedelta(hours=4), observed_at=TUESDAY - timedelta(hours=4),
+                player_id=martinez,
+                team_id=await _id(session, EntityType.TEAM, "MAD"),
+                game_id=(await _game(session, 5)).id,
+                status=AvailabilityStatus.OUT,
+                source_type=StatusSourceType.NEWS,
+                confidence=0.85,
+                reason="ruled out",
+                event_timestamp=TUESDAY - timedelta(hours=4),
+                observed_at=TUESDAY - timedelta(hours=4),
             )
         )
         unchanged = await _import(session, BLOCKS, at=TUESDAY)
         assert unchanged.written == 0  # type: ignore[attr-defined]
 
-        await predict_game(session, await _game(session, 5), await _models(session),
-                           clock=INGEST, settings=settings)
+        await predict_game(
+            session,
+            await _game(session, 5),
+            await _models(session),
+            clock=INGEST,
+            settings=settings,
+        )
         plays = await _plays(session, 5)
         assert plays["012002"][0] == pytest.approx(0.9)  # not ruled out
         assert plays["011002"][0] == 0.0  # the table's own outs still apply

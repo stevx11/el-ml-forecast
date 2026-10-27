@@ -162,9 +162,7 @@ class PredictionOutcome(Base, UUIDPrimaryKeyMixin, TimestampMixin):
     """
 
     __tablename__ = "prediction_outcomes"
-    __table_args__ = (
-        UniqueConstraint("prediction_id", name="uq_prediction_outcomes_prediction"),
-    )
+    __table_args__ = (UniqueConstraint("prediction_id", name="uq_prediction_outcomes_prediction"),)
 
     prediction_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("predictions.id"), nullable=False

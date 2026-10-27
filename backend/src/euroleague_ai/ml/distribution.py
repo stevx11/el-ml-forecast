@@ -306,9 +306,7 @@ class ResidualDistribution:
         return cls(
             level_edges=[float(v) for v in payload["level_edges"]],
             cells={k: [float(x) for x in v] for k, v in payload["cells"].items()},
-            by_history={
-                k: [float(x) for x in v] for k, v in payload["by_history"].items()
-            },
+            by_history={k: [float(x) for x in v] for k, v in payload["by_history"].items()},
             pooled=[float(v) for v in payload["pooled"]],
             pooled_iqr=float(payload.get("pooled_iqr", 0.0)),
             sample_size=int(payload.get("sample_size", 0)),
@@ -339,9 +337,7 @@ def fit_residual_distribution(
     # is mostly zero (three-pointers). Deduplicate so bucket indices stay sane.
     level_edges = sorted(set(level_edges))
 
-    distribution = ResidualDistribution(
-        level_edges=level_edges, cells={}, by_history={}, pooled=[]
-    )
+    distribution = ResidualDistribution(level_edges=level_edges, cells={}, by_history={}, pooled=[])
 
     raw_cells: dict[str, list[float]] = {}
     raw_history: dict[str, list[float]] = {}

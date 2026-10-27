@@ -24,9 +24,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from euroleague_ai.core.clock import Clock, SystemClock
 from euroleague_ai.core.logging import get_logger
+from euroleague_ai.ml.train import TrainingResult, suspiciously_good
 from euroleague_ai.models.enums import PredictionTarget
 from euroleague_ai.models.prediction import ModelVersion
-from euroleague_ai.ml.train import TrainingResult, suspiciously_good
 
 logger = get_logger(__name__)
 
@@ -108,10 +108,10 @@ def model_name_for(target: PredictionTarget) -> str:
 async def next_version(session: AsyncSession, name: str) -> str:
     """Return the next patch version for ``name``, starting at ``0.1.0``."""
     existing = (
-        await session.execute(
-            select(ModelVersion.version).where(ModelVersion.name == name)
-        )
-    ).scalars().all()
+        (await session.execute(select(ModelVersion.version).where(ModelVersion.name == name)))
+        .scalars()
+        .all()
+    )
     if not existing:
         return "0.1.0"
 
@@ -227,9 +227,7 @@ async def register_model(
     return model_version
 
 
-async def active_model(
-    session: AsyncSession, target: PredictionTarget
-) -> ModelVersion | None:
+async def active_model(session: AsyncSession, target: PredictionTarget) -> ModelVersion | None:
     """Return the active model for a target, if one passed the gate."""
     return (
         await session.execute(
@@ -243,11 +241,7 @@ async def active_model(
 async def list_models(session: AsyncSession) -> list[ModelVersion]:
     """Every registered model, newest first."""
     return list(
-        (
-            await session.execute(
-                select(ModelVersion).order_by(ModelVersion.trained_at.desc())
-            )
-        )
+        (await session.execute(select(ModelVersion).order_by(ModelVersion.trained_at.desc())))
         .scalars()
         .all()
     )

@@ -71,9 +71,7 @@ class TestHealth:
 
     async def test_correlation_id_is_echoed(self, client: AsyncClient) -> None:
         """So a user can quote it in a bug report and the logs can be found."""
-        response = await client.get(
-            "/health/live", headers={"X-Correlation-ID": "abc123"}
-        )
+        response = await client.get("/health/live", headers={"X-Correlation-ID": "abc123"})
         assert response.headers["X-Correlation-ID"] == "abc123"
 
 
@@ -104,9 +102,7 @@ class TestCatalogEndpoints:
         assert len(items) == 1
         assert items[0]["full_name"].startswith("PETROVIC")
 
-    async def test_player_game_log_renders_minutes(
-        self, client: AsyncClient, seeded: None
-    ) -> None:
+    async def test_player_game_log_renders_minutes(self, client: AsyncClient, seeded: None) -> None:
         """Storage keeps seconds; the API presents minutes."""
         listing = await client.get("/api/v1/players", params={"search": "PETROVIC"})
         player_id = listing.json()["items"][0]["id"]
@@ -149,9 +145,7 @@ class TestCatalogEndpoints:
 
 class TestErrors:
     async def test_unknown_uuid_is_404(self, client: AsyncClient, seeded: None) -> None:
-        response = await client.get(
-            "/api/v1/players/00000000-0000-0000-0000-000000000000"
-        )
+        response = await client.get("/api/v1/players/00000000-0000-0000-0000-000000000000")
         assert response.status_code == 404
 
     async def test_malformed_uuid_is_422(self, client: AsyncClient) -> None:

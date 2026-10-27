@@ -65,7 +65,7 @@ def parse_clock_to_seconds(raw: str | float | int | None) -> int:
     if raw is None:
         return 0
     if isinstance(raw, (int, float)):
-        return max(0, int(round(float(raw))))
+        return max(0, round(float(raw)))
 
     candidate = raw.strip()
     if not candidate or candidate.upper() in {"DNP", "-", "--"}:
@@ -74,7 +74,7 @@ def parse_clock_to_seconds(raw: str | float | int | None) -> int:
         return int(match.group(1)) * 60 + int(match.group(2))
     # Some feeds emit a bare number of seconds as a string.
     try:
-        return max(0, int(round(float(candidate))))
+        return max(0, round(float(candidate)))
     except ValueError:
         return 0
 
@@ -174,9 +174,9 @@ def parse_int(raw: object) -> int:
     if isinstance(raw, bool):
         return int(raw)
     if isinstance(raw, (int, float)):
-        return int(round(float(raw)))
+        return round(float(raw))
     try:
-        return int(round(float(str(raw).strip())))
+        return round(float(str(raw).strip()))
     except (ValueError, TypeError):
         return 0
 
@@ -192,9 +192,7 @@ def parse_optional_int(raw: object) -> int | None:
     return parse_int(raw)
 
 
-def estimate_possessions(
-    *, fga: int, offensive_rebounds: int, turnovers: int, fta: int
-) -> float:
+def estimate_possessions(*, fga: int, offensive_rebounds: int, turnovers: int, fta: int) -> float:
     """Standard possession estimate: ``FGA - OREB + TO + 0.44 * FTA``.
 
     The 0.44 coefficient approximates the share of free throw attempts that end a

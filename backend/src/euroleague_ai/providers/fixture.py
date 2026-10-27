@@ -88,9 +88,7 @@ class FixtureProvider:
             games = [game for game in games if game.round_number == round_number]
         return games
 
-    async def fetch_game_stats(
-        self, season: SeasonRef, game_code: int
-    ) -> GameStatsDTO | None:
+    async def fetch_game_stats(self, season: SeasonRef, game_code: int) -> GameStatsDTO | None:
         payload = self._load("game_stats", f"{game_code}.json")
         if not isinstance(payload, dict):
             return None

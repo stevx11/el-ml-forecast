@@ -71,12 +71,8 @@ class TestFullIngestion:
             "teams": (await session.execute(select(func.count(Team.id)))).scalar_one(),
             "players": (await session.execute(select(func.count(Player.id)))).scalar_one(),
             "games": (await session.execute(select(func.count(Game.id)))).scalar_one(),
-            "stats": (
-                await session.execute(select(func.count(PlayerGameStats.id)))
-            ).scalar_one(),
-            "stints": (
-                await session.execute(select(func.count(PlayerTeamStint.id)))
-            ).scalar_one(),
+            "stats": (await session.execute(select(func.count(PlayerGameStats.id)))).scalar_one(),
+            "stints": (await session.execute(select(func.count(PlayerTeamStint.id)))).scalar_one(),
         }
 
         await ingest_all(session, fixture_provider, season, clock=CLOCK)
@@ -86,12 +82,8 @@ class TestFullIngestion:
             "teams": (await session.execute(select(func.count(Team.id)))).scalar_one(),
             "players": (await session.execute(select(func.count(Player.id)))).scalar_one(),
             "games": (await session.execute(select(func.count(Game.id)))).scalar_one(),
-            "stats": (
-                await session.execute(select(func.count(PlayerGameStats.id)))
-            ).scalar_one(),
-            "stints": (
-                await session.execute(select(func.count(PlayerTeamStint.id)))
-            ).scalar_one(),
+            "stats": (await session.execute(select(func.count(PlayerGameStats.id)))).scalar_one(),
+            "stints": (await session.execute(select(func.count(PlayerTeamStint.id)))).scalar_one(),
         }
         assert before == after
 
@@ -115,15 +107,21 @@ class TestIdentityResolution:
         await session.flush()
 
         players = (
-            await session.execute(select(Player).where(Player.last_name == "NIKOLIC"))
-        ).scalars().all()
+            (await session.execute(select(Player).where(Player.last_name == "NIKOLIC")))
+            .scalars()
+            .all()
+        )
         assert len(players) == 1
 
         stints = (
-            await session.execute(
-                select(PlayerTeamStint).where(PlayerTeamStint.player_id == players[0].id)
+            (
+                await session.execute(
+                    select(PlayerTeamStint).where(PlayerTeamStint.player_id == players[0].id)
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         assert len(stints) == 2
 
 
@@ -135,15 +133,11 @@ class TestSeasonNaming:
         await ingest_teams(session, fixture_provider, season, clock=CLOCK)
         await session.flush()
 
-        team = (
-            await session.execute(select(Team).where(Team.code == "BAS"))
-        ).scalar_one()
+        team = (await session.execute(select(Team).where(Team.code == "BAS"))).scalar_one()
         assert team.name == "Saski Baskonia"
 
         registration = (
-            await session.execute(
-                select(TeamSeason).where(TeamSeason.team_id == team.id)
-            )
+            await session.execute(select(TeamSeason).where(TeamSeason.team_id == team.id))
         ).scalar_one()
         assert registration.display_name == "Saski Baskonia"
 
@@ -272,9 +266,7 @@ class TestBoxScoreResilience:
 
         assert result.details.get("failed") == 1
         # The other four games were still written.
-        written = (
-            await session.execute(select(func.count(PlayerGameStats.id)))
-        ).scalar_one()
+        written = (await session.execute(select(func.count(PlayerGameStats.id)))).scalar_one()
         assert written > 0
 
         stats_by_game = (
@@ -340,7 +332,11 @@ class TestBoxScoreResilience:
 
         healthy = _FailingProvider(fixture_provider, fail_codes=set())
         await ingest_game_stats(
-            session, healthy, season, refresh_existing=True, clock=CLOCK  # type: ignore[arg-type]
+            session,
+            healthy,
+            season,
+            refresh_existing=True,
+            clock=CLOCK,  # type: ignore[arg-type]
         )
         assert sorted(healthy.attempted) == [1, 2, 3, 4, 6]
 

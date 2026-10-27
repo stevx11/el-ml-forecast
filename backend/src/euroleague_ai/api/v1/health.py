@@ -29,16 +29,14 @@ async def liveness(settings: SettingsDep) -> HealthOut:
 
 
 @router.get("/health/ready", response_model=ReadinessOut)
-async def readiness(
-    session: SessionDep, settings: SettingsDep, response: Response
-) -> ReadinessOut:
+async def readiness(session: SessionDep, settings: SettingsDep, response: Response) -> ReadinessOut:
     """Dependency readiness. Poll this before routing traffic."""
     database_ok = True
     detail: str | None = None
 
     try:
         await session.execute(text("SELECT 1"))
-    except Exception as exc:  # noqa: BLE001 - report, do not propagate
+    except Exception as exc:
         database_ok = False
         detail = f"database: {type(exc).__name__}"
         logger.warning("readiness: database unreachable", extra={"error": str(exc)})
@@ -68,5 +66,5 @@ async def _check_redis(redis_url: object) -> bool:
             return True
         finally:
             await client.aclose()
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False

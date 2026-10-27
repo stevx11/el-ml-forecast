@@ -15,13 +15,12 @@ from sqlalchemy import pool
 from sqlalchemy.engine import Connection
 from sqlalchemy.ext.asyncio import async_engine_from_config
 
-from euroleague_ai.core.config import get_settings
-from euroleague_ai.db.base import Base
-
 # Importing the models package is what registers every table on Base.metadata.
 # Without this line autogenerate sees empty metadata and proposes dropping the
 # entire schema.
 import euroleague_ai.models  # noqa: F401
+from euroleague_ai.core.config import get_settings
+from euroleague_ai.db.base import Base
 
 config = context.config
 

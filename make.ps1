@@ -74,7 +74,7 @@ function Show-Help {
         'revision'  = 'Autogenerate a migration:  .\make.ps1 revision -Message "add x"'
         'ingest'    = 'Ingest a season:           .\make.ps1 ingest -Season E2025'
         'test'      = 'Run the full test suite'
-        'lint'      = 'Run ruff'
+        'lint'      = 'Run ruff (lint and format check)'
         'typecheck' = 'Run mypy'
         'fmt'       = 'Format and autofix with ruff'
         'check'     = 'lint + typecheck + test (what CI would run)'
@@ -132,7 +132,10 @@ switch ($Target) {
     }
 
     'test'      { Invoke-Step ($Compose + @('exec', '-T', 'backend', 'pytest')) }
-    'lint'      { Invoke-Step ($Compose + @('exec', '-T', 'backend', 'ruff', 'check', 'backend')) }
+    'lint' {
+        Invoke-Step ($Compose + @('exec', '-T', 'backend', 'ruff', 'check', 'backend'))
+        Invoke-Step ($Compose + @('exec', '-T', 'backend', 'ruff', 'format', '--check', 'backend'))
+    }
     'typecheck' { Invoke-Step ($Compose + @('exec', '-T', 'backend', 'mypy')) }
 
     'fmt' {
@@ -142,6 +145,7 @@ switch ($Target) {
 
     'check' {
         Invoke-Step ($Compose + @('exec', '-T', 'backend', 'ruff', 'check', 'backend'))
+        Invoke-Step ($Compose + @('exec', '-T', 'backend', 'ruff', 'format', '--check', 'backend'))
         Invoke-Step ($Compose + @('exec', '-T', 'backend', 'mypy'))
         Invoke-Step ($Compose + @('exec', '-T', 'backend', 'pytest'))
     }

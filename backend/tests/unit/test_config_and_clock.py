@@ -61,9 +61,7 @@ class TestSettings:
         expected = [item.strip() for item in raw.split(",") if item.strip()]
         assert settings.news_feed_urls == expected
 
-    def test_unset_feed_urls_defaults_to_empty(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_unset_feed_urls_defaults_to_empty(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.delenv("NEWS_FEED_URLS", raising=False)
         assert Settings(_env_file=None).news_feed_urls == []
 
@@ -98,7 +96,7 @@ class TestClock:
         ordering is how a leak gets introduced silently.
         """
         with pytest.raises(ValueError, match="timezone-aware"):
-            ensure_utc(datetime(2025, 1, 1))
+            ensure_utc(datetime(2025, 1, 1))  # noqa: DTZ001 - deliberately naive
 
     def test_ensure_utc_converts_other_offsets(self) -> None:
         belgrade = datetime(2025, 1, 1, 13, 0, tzinfo=timezone(timedelta(hours=1)))

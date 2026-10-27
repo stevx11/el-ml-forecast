@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from euroleague_ai.core.logging import get_logger
@@ -114,6 +115,13 @@ WHERE observed_at > effective_from
 """
 
 
+async def _rows_changed(session: AsyncSession, sql: str, params: dict[str, Any]) -> int:
+    """Run an UPDATE or DELETE and return how many rows it touched."""
+    result = await session.execute(text(sql), params)
+    assert isinstance(result, CursorResult)
+    return result.rowcount or 0
+
+
 def _params() -> dict[str, float]:
     return {
         "lead_seconds": FIXTURE_KNOWN_BEFORE.total_seconds(),
@@ -152,10 +160,10 @@ async def repair_observed_at(session: AsyncSession, *, dry_run: bool = False) ->
         return result
 
     # Games first: the stats repairs read tip_off_utc, which this does not touch.
-    games = (await session.execute(text(_FIXTURE_UPDATE), params)).rowcount or 0
-    player_stats = (await session.execute(text(_PLAYER_STATS_UPDATE), params)).rowcount or 0
-    team_stats = (await session.execute(text(_TEAM_STATS_UPDATE), params)).rowcount or 0
-    stints = (await session.execute(text(_STINT_UPDATE), params)).rowcount or 0
+    games = await _rows_changed(session, _FIXTURE_UPDATE, params)
+    player_stats = await _rows_changed(session, _PLAYER_STATS_UPDATE, params)
+    team_stats = await _rows_changed(session, _TEAM_STATS_UPDATE, params)
+    stints = await _rows_changed(session, _STINT_UPDATE, params)
 
     result = RepairResult(
         games=games,
@@ -202,11 +210,9 @@ async def purge_feature_snapshots(
         ),
         params,
     )
-    deleted = (
-        await session.execute(
-            text("DELETE FROM player_feature_snapshots" + snapshot_filter), params
-        )
-    ).rowcount or 0
+    deleted = await _rows_changed(
+        session, "DELETE FROM player_feature_snapshots" + snapshot_filter, params
+    )
 
     logger.info(
         "purged feature snapshots",

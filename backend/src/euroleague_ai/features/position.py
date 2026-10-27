@@ -112,9 +112,7 @@ def summarise_position(
     # group of three than in a group of six.
     features["same_position_rank_pct"] = round(rank / len(group), 4)
     features["same_position_minutes_total"] = round(total, 2)
-    features["same_position_minutes_share"] = (
-        round(own_minutes / total, 4) if total > 0 else None
-    )
+    features["same_position_minutes_share"] = round(own_minutes / total, 4) if total > 0 else None
     return features
 
 
@@ -139,6 +137,4 @@ async def build_position_features(
     appearances = await teams.squad_appearances(
         team_id, as_of=as_of, games=COMPETITION_WINDOW, season_id=season_id
     )
-    return summarise_position(
-        player_id=player_id, positions=positions, appearances=appearances
-    )
+    return summarise_position(player_id=player_id, positions=positions, appearances=appearances)

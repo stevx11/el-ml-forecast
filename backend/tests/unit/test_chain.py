@@ -171,8 +171,7 @@ class TestMinutesWeighting:
         assert all(r is not None for r in rates)
 
         weighted = sum(
-            r * line.actual_minutes
-            for r, line in zip(rates, (long_line, short_line), strict=True)
+            r * line.actual_minutes for r, line in zip(rates, (long_line, short_line), strict=True)
         ) / (long_line.actual_minutes + short_line.actual_minutes)
 
         pooled = (

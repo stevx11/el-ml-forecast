@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -26,7 +27,7 @@ from euroleague_ai.models.people import Player
 MAX_PAGE_SIZE = 200
 
 
-def _paginate(stmt: Select[tuple], *, limit: int, offset: int) -> Select[tuple]:
+def _paginate[S: Select[Any]](stmt: S, *, limit: int, offset: int) -> S:
     """Clamp pagination so a client cannot request the entire table."""
     return stmt.limit(min(max(limit, 1), MAX_PAGE_SIZE)).offset(max(offset, 0))
 
@@ -82,7 +83,11 @@ class PlayerRepository:
         stmt = select(Player).order_by(Player.full_name)
         if search:
             stmt = stmt.where(Player.full_name.ilike(f"%{search}%"))
-        return (await self._session.execute(_paginate(stmt, limit=limit, offset=offset))).scalars().all()
+        return (
+            (await self._session.execute(_paginate(stmt, limit=limit, offset=offset)))
+            .scalars()
+            .all()
+        )
 
     async def get(self, player_id: uuid.UUID) -> Player | None:
         return await self._session.get(Player, player_id)
@@ -140,7 +145,11 @@ class GameRepository:
             stmt = stmt.where(Game.tip_off_utc <= date_to)
         if team_id is not None:
             stmt = stmt.where((Game.home_team_id == team_id) | (Game.away_team_id == team_id))
-        return (await self._session.execute(_paginate(stmt, limit=limit, offset=offset))).scalars().all()
+        return (
+            (await self._session.execute(_paginate(stmt, limit=limit, offset=offset)))
+            .scalars()
+            .all()
+        )
 
     async def get(self, game_id: uuid.UUID) -> Game | None:
         stmt = (

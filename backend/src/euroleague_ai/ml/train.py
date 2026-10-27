@@ -27,10 +27,9 @@ from __future__ import annotations
 import hashlib
 import math
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from euroleague_ai.core.logging import get_logger
-from euroleague_ai.models.enums import PredictionTarget
 from euroleague_ai.ml.baselines import default_baselines
 from euroleague_ai.ml.dataset import TrainingRow
 from euroleague_ai.ml.distribution import (
@@ -41,9 +40,7 @@ from euroleague_ai.ml.distribution import (
 from euroleague_ai.ml.evaluation import Metrics, compute_metrics, stratified_metrics
 from euroleague_ai.ml.expectation import ExpectationReport, fit_expectation
 from euroleague_ai.ml.matrix import derive_feature_names, matrix_summary, to_matrix
-
-if TYPE_CHECKING:  # pragma: no cover - typing only
-    import lightgbm as lgb
+from euroleague_ai.models.enums import PredictionTarget
 
 logger = get_logger(__name__)
 
@@ -293,9 +290,7 @@ def mean_residual(predictions: Any, actuals: Any) -> float:
     return float(np.mean(np.asarray(actuals) - np.asarray(predictions)))
 
 
-def _best_baseline(
-    rows: list[TrainingRow], target: PredictionTarget
-) -> tuple[str, Metrics]:
+def _best_baseline(rows: list[TrainingRow], target: PredictionTarget) -> tuple[str, Metrics]:
     """Best baseline on exactly the rows the model is judged on.
 
     Recomputed here rather than reusing the Phase 2 report, because the model is
@@ -368,9 +363,7 @@ def train_target(
         ],
     )
 
-    validation_predictions = booster.predict(
-        x_validation, num_iteration=booster.best_iteration
-    )
+    validation_predictions = booster.predict(x_validation, num_iteration=booster.best_iteration)
     offset = calibration_offset(validation_predictions, y_validation)
     validation_mean_residual = mean_residual(validation_predictions, y_validation)
 

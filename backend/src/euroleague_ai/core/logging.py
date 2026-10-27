@@ -26,10 +26,29 @@ _correlation_id: ContextVar[str | None] = ContextVar("correlation_id", default=N
 # the caller via `extra=` and belongs in the structured payload.
 _RESERVED_ATTRS = frozenset(
     {
-        "args", "asctime", "created", "exc_info", "exc_text", "filename",
-        "funcName", "levelname", "levelno", "lineno", "module", "msecs",
-        "message", "msg", "name", "pathname", "process", "processName",
-        "relativeCreated", "stack_info", "thread", "threadName", "taskName",
+        "args",
+        "asctime",
+        "created",
+        "exc_info",
+        "exc_text",
+        "filename",
+        "funcName",
+        "levelname",
+        "levelno",
+        "lineno",
+        "module",
+        "msecs",
+        "message",
+        "msg",
+        "name",
+        "pathname",
+        "process",
+        "processName",
+        "relativeCreated",
+        "stack_info",
+        "thread",
+        "threadName",
+        "taskName",
     }
 )
 
@@ -117,7 +136,7 @@ def configure_logging(*, level: str = "INFO", fmt: str = "console") -> None:
     logging.getLogger("sqlalchemy.engine").setLevel(logging.WARNING)
 
 
-class SafeExtraLogger(logging.LoggerAdapter):
+class SafeExtraLogger(logging.LoggerAdapter[logging.Logger]):
     """Logger that cannot be crashed by a colliding ``extra`` key.
 
     ``logging`` raises ``KeyError: "Attempt to overwrite 'name' in LogRecord"``

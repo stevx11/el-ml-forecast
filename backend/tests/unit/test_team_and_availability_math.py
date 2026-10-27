@@ -173,7 +173,7 @@ class TestAvailabilityProxy:
         subject = uuid.uuid4()
         older, latest = uuid.uuid4(), uuid.uuid4()
         appearances = [
-            _appearance(latest, subject, 0, day=1),   # missed
+            _appearance(latest, subject, 0, day=1),  # missed
             _appearance(older, subject, 30, day=8),
         ]
         features = summarise_squad(appearances, player_id=subject)

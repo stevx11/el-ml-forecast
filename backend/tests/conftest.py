@@ -56,11 +56,11 @@ _ENUM_TYPE_NAMES = (
 
 def _test_database_url() -> str | None:
     """Resolve the test database DSN from the environment or settings."""
-    if (explicit := os.environ.get("TEST_DATABASE_URL")):
+    if explicit := os.environ.get("TEST_DATABASE_URL"):
         return explicit
     try:
         configured = get_settings().test_database_url
-    except Exception:  # noqa: BLE001 - misconfiguration should skip, not error
+    except Exception:
         return None
     return str(configured) if configured else None
 

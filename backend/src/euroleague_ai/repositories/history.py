@@ -81,7 +81,7 @@ def _as_of_guard(as_of: datetime) -> datetime:
     return ensure_utc(as_of, field="as_of")
 
 
-def _observed_before(as_of: datetime) -> Select[tuple[PlayerGameStats]]:
+def _observed_before(as_of: datetime) -> Select[PlayerGameStats]:
     """Base select over box score lines visible at ``as_of``."""
     return (
         select(PlayerGameStats)
@@ -198,9 +198,7 @@ class PlayerHistoryRepository:
         )
         return int((await self._session.execute(stmt)).scalar_one())
 
-    async def status_as_of(
-        self, player_id: uuid.UUID, *, as_of: datetime
-    ) -> AvailabilityStatus:
+    async def status_as_of(self, player_id: uuid.UUID, *, as_of: datetime) -> AvailabilityStatus:
         """Return the player's most recent known availability at ``as_of``.
 
         This is the query the worked example in ``docs/data-model.md`` describes.
@@ -230,9 +228,7 @@ class PlayerHistoryRepository:
         status = (await self._session.execute(stmt)).scalar_one_or_none()
         return status if status is not None else AvailabilityStatus.UNKNOWN
 
-    async def team_as_of(
-        self, player_id: uuid.UUID, *, as_of: datetime
-    ) -> uuid.UUID | None:
+    async def team_as_of(self, player_id: uuid.UUID, *, as_of: datetime) -> uuid.UUID | None:
         """Return the team the player was registered with at ``as_of``.
 
         Queries the stint intervals rather than a mutable column, so a February
@@ -439,9 +435,7 @@ class TeamHistoryRepository:
             for row in (await self._session.execute(stmt)).all()
         ]
 
-    async def last_game_before(
-        self, team_id: uuid.UUID, *, as_of: datetime
-    ) -> datetime | None:
+    async def last_game_before(self, team_id: uuid.UUID, *, as_of: datetime) -> datetime | None:
         """Tip-off of the team's most recent game before ``as_of``. Backs rest days."""
         as_of = _as_of_guard(as_of)
         stmt = (
@@ -455,7 +449,6 @@ class TeamHistoryRepository:
             )
         )
         return (await self._session.execute(stmt)).scalar_one_or_none()
-
 
     async def squad_positions(
         self,

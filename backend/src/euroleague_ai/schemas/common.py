@@ -2,11 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Generic, TypeVar
-
 from pydantic import BaseModel, ConfigDict, Field
-
-T = TypeVar("T")
 
 
 class PageMeta(BaseModel):
@@ -17,7 +13,7 @@ class PageMeta(BaseModel):
     returned: int = Field(ge=0)
 
 
-class Page(BaseModel, Generic[T]):
+class Page[T](BaseModel):
     """A page of results.
 
     Always an envelope, never a bare array: adding pagination metadata to a

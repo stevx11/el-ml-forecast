@@ -42,7 +42,7 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
         bind=engine,
         class_=AsyncSession,
         expire_on_commit=False,  # response serialisation happens after commit
-        autoflush=False,         # flushes are explicit; ingestion depends on ordering
+        autoflush=False,  # flushes are explicit; ingestion depends on ordering
     )
 
 

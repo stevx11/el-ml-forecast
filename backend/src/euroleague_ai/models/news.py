@@ -94,9 +94,7 @@ class NewsEvent(Base, UUIDPrimaryKeyMixin, ObservedMixin, TimestampMixin):
 
     __tablename__ = "news_events"
     __table_args__ = (
-        CheckConstraint(
-            "confidence >= 0 AND confidence <= 1", name="confidence_in_unit_interval"
-        ),
+        CheckConstraint("confidence >= 0 AND confidence <= 1", name="confidence_in_unit_interval"),
         Index("ix_news_events_player_observed", "player_id", "observed_at"),
         Index("ix_news_events_type_observed", "event_type", "observed_at"),
     )

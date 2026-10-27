@@ -171,9 +171,7 @@ class TestLateArrivingKnowledgeIsInvisible:
         """
         await _seed(session, fixture_provider, season)
 
-        game = (
-            await session.execute(select(Game).where(Game.game_code == 6))
-        ).scalar_one()
+        game = (await session.execute(select(Game).where(Game.game_code == 6))).scalar_one()
         game.tip_off_utc = CUTOFF - timedelta(days=1)
 
         # ...but our system did not learn of it until an hour after the cutoff.
@@ -504,7 +502,7 @@ class TestOpponentFeaturesRespectTheCutoff:
                 session,
                 team_id=team_id,
                 opponent_team_id=team_id,
-                as_of=datetime(2025, 10, 31, 17, 0),
+                as_of=datetime(2025, 10, 31, 17, 0),  # noqa: DTZ001 - deliberately naive
             )
 
 
@@ -563,16 +561,16 @@ class TestComposedFeatureSet:
         )
 
         for marker in (
-            "season_points_mean",       # form
-            "starter_last_game",        # role
-            "days_rest",                # schedule
-            "team_off_rating",          # team
-            "opp_def_rating",           # opponent
+            "season_points_mean",  # form
+            "starter_last_game",  # role
+            "days_rest",  # schedule
+            "team_off_rating",  # team
+            "opp_def_rating",  # opponent
             "teammate_minutes_absent",  # availability
-            "recent_played_share",      # appearances (v6)
-            "opp_pos_points_pg",        # opponent_position (v6)
-            "coach_games_in_charge",    # coach (v6)
-            "days_to_next_team_game",   # schedule_venue (v6)
+            "recent_played_share",  # appearances (v6)
+            "opp_pos_points_pg",  # opponent_position (v6)
+            "coach_games_in_charge",  # coach (v6)
+            "days_to_next_team_game",  # schedule_venue (v6)
         ):
             assert marker in vector, f"missing family marker: {marker}"
 
@@ -626,7 +624,8 @@ class TestTheCutoffIsMandatory:
 
         with pytest.raises(ValueError, match="timezone-aware"):
             await PlayerHistoryRepository(session).recent_games(
-                player_id, as_of=datetime(2025, 10, 31, 17, 0)
+                player_id,
+                as_of=datetime(2025, 10, 31, 17, 0),  # noqa: DTZ001 - deliberately naive
             )
 
     def test_builders_have_no_default_cutoff(self) -> None:

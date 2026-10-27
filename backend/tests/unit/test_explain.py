@@ -97,11 +97,7 @@ ALL_FEATURES = [name for names in FEATURES_BY_THEME.values() for name in names]
 class TestAttribution:
     @pytest.mark.parametrize(
         ("feature", "expected"),
-        [
-            (feature, theme)
-            for theme, features in FEATURES_BY_THEME.items()
-            for feature in features
-        ],
+        [(feature, theme) for theme, features in FEATURES_BY_THEME.items() for feature in features],
     )
     def test_each_feature_lands_in_its_theme(self, feature: str, expected: str) -> None:
         assert theme_for(feature) == expected
@@ -230,9 +226,7 @@ class TestStoredPayload:
     def test_payload_is_json_serialisable(self) -> None:
         import json
 
-        result = explain_prediction(
-            ALL_FEATURES, [0.2] * len(ALL_FEATURES), base_value=3.0
-        )
+        result = explain_prediction(ALL_FEATURES, [0.2] * len(ALL_FEATURES), base_value=3.0)
         assert json.loads(json.dumps(result)) == result
 
     def test_render_handles_a_missing_explanation(self) -> None:

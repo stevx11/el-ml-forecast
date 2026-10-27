@@ -13,10 +13,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from euroleague_ai.core.logging import get_logger
 from euroleague_ai.features.registry import FEATURE_SET_VERSION
-from euroleague_ai.models.enums import PredictionTarget
 from euroleague_ai.ml.baselines import default_baselines
 from euroleague_ai.ml.dataset import describe_rows, load_training_rows
 from euroleague_ai.ml.evaluation import backtest, compare
+from euroleague_ai.models.enums import PredictionTarget
 
 logger = get_logger(__name__)
 

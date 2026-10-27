@@ -69,9 +69,7 @@ class TestMismatch:
     def test_the_margin_is_symmetric_between_the_two_sides(self) -> None:
         favourite = script(team_off=120.0, team_def=100.0, opp_off=100.0, opp_def=120.0)
         underdog = script(team_off=100.0, team_def=120.0, opp_off=120.0, opp_def=100.0)
-        assert underdog["game_expected_margin"] == pytest.approx(
-            -favourite["game_expected_margin"]
-        )
+        assert underdog["game_expected_margin"] == pytest.approx(-favourite["game_expected_margin"])
 
 
 class TestBlowoutRiskIsUnsigned:
@@ -86,9 +84,7 @@ class TestBlowoutRiskIsUnsigned:
             underdog["game_expected_abs_margin"]
         )
         # ...while the signed margin still distinguishes them.
-        assert favourite["game_expected_margin"] != pytest.approx(
-            underdog["game_expected_margin"]
-        )
+        assert favourite["game_expected_margin"] != pytest.approx(underdog["game_expected_margin"])
 
     def test_risk_saturates_rather_than_growing_without_bound(self) -> None:
         """A 40-point gap does not shorten a rotation twice as much as a 20.

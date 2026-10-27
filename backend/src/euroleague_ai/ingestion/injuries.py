@@ -93,9 +93,7 @@ async def current_rosters(session: AsyncSession, *, as_of: datetime) -> list[Ros
         return []
     players = {
         p.id: p
-        for p in (
-            await session.execute(select(Player).where(Player.id.in_(list(clubs))))
-        ).scalars()
+        for p in (await session.execute(select(Player).where(Player.id.in_(list(clubs))))).scalars()
     }
     teams = {
         t.id: t.code
@@ -135,9 +133,7 @@ def match_player(
     A player code matches exactly. Otherwise every word of the query must appear
     among the words of the name.
     """
-    pool = [
-        p for p in roster if team_code is None or p.team_code.upper() == team_code.upper()
-    ]
+    pool = [p for p in roster if team_code is None or p.team_code.upper() == team_code.upper()]
     stripped = query.strip()
     by_code = [p for p in pool if p.code and p.code.lstrip("P0") == stripped.lstrip("P0")]
     if stripped and by_code:
@@ -152,7 +148,9 @@ def match_player(
         matches = [
             p
             for p in pool
-            if all(any(part.startswith(w) for part in normalise(p.full_name).split()) for w in words)
+            if all(
+                any(part.startswith(w) for part in normalise(p.full_name).split()) for w in words
+            )
         ]
     if len(matches) == 1:
         return matches[0]
@@ -165,9 +163,7 @@ def match_player(
     )
 
 
-async def next_game(
-    session: AsyncSession, team_id: uuid.UUID, *, after: datetime
-) -> Game | None:
+async def next_game(session: AsyncSession, team_id: uuid.UUID, *, after: datetime) -> Game | None:
     """The team's next scheduled fixture after ``after``."""
     return (
         await session.execute(
@@ -225,7 +221,9 @@ async def record_report(
         stmt = select(Game).where(Game.game_code == game_code)
         if season_id is not None:
             stmt = stmt.where(Game.season_id == season_id)
-        game = (await session.execute(stmt.order_by(Game.tip_off_utc.desc()).limit(1))).scalar_one_or_none()
+        game = (
+            await session.execute(stmt.order_by(Game.tip_off_utc.desc()).limit(1))
+        ).scalar_one_or_none()
         if game is None:
             raise InjuryInputError(f"no game with code {game_code}")
         if match.team_id not in (game.home_team_id, game.away_team_id):
@@ -235,7 +233,7 @@ async def record_report(
         scope = "game"
     elif until:
         try:
-            day = datetime.strptime(until, "%Y-%m-%d").date()
+            day = datetime.strptime(until, "%Y-%m-%d").replace(tzinfo=UTC).date()
         except ValueError as exc:
             raise InjuryInputError(f"--until must be YYYY-MM-DD, got {until!r}") from exc
         expected_return = datetime.combine(day, time(0, 0), tzinfo=UTC)
@@ -318,7 +316,8 @@ async def import_reports(
                         team_code=(row.get("team") or "").strip() or None,
                         reason=(row.get("reason") or "").strip() or None,
                         until=(row.get("until") or "").strip() or None,
-                        indefinite=(row.get("indefinite") or "").strip().lower() in ("1", "true", "yes", "y"),
+                        indefinite=(row.get("indefinite") or "").strip().lower()
+                        in ("1", "true", "yes", "y"),
                         game_code=int(code) if code else None,
                         season_id=season_id,
                     )

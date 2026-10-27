@@ -22,8 +22,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-from euroleague_ai.models.enums import PredictionTarget
 from euroleague_ai.ml.dataset import TARGET_FEATURE_STEMS, TrainingRow
+from euroleague_ai.models.enums import PredictionTarget
 
 
 def _feature(row: TrainingRow, name: str) -> float | None:
@@ -40,7 +40,8 @@ def _feature(row: TrainingRow, name: str) -> float | None:
 class Baseline(Protocol):
     """A prediction rule requiring no training."""
 
-    name: str
+    @property
+    def name(self) -> str: ...
 
     def predict(self, row: TrainingRow, target: PredictionTarget) -> float | None:
         """Return a prediction, or ``None`` when the inputs are unavailable.

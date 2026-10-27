@@ -8,6 +8,7 @@ the feature was never built is worse than no endpoint -- a client cannot tell
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 from sqlalchemy import select
@@ -28,7 +29,7 @@ from euroleague_ai.schemas.prediction import (
 router = APIRouter(tags=["predictions"])
 
 
-async def _load(session: SessionDep, **filters: object) -> list[tuple]:
+async def _load(session: SessionDep, **filters: object) -> list[tuple[Any, ...]]:
     stmt = (
         select(
             Prediction,
@@ -101,8 +102,7 @@ async def game_projections(game_id: uuid.UUID, session: SessionDep) -> Projectio
                 float(prediction.confidence) if prediction.confidence is not None else None
             ),
             drivers=[
-                DriverOut(**driver)
-                for driver in (prediction.explanation or {}).get("drivers", [])
+                DriverOut(**driver) for driver in (prediction.explanation or {}).get("drivers", [])
             ],
         )
 

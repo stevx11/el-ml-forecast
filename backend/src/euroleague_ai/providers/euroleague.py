@@ -56,7 +56,7 @@ _PAGE_SIZE = 100
 _RETRYABLE_STATUS = frozenset({408, 425, 429, 500, 502, 503, 504})
 
 
-class _RetryableResponse(Exception):
+class _RetryableResponse(Exception):  # noqa: N818 - a signal, not an error to report
     """Internal marker so tenacity retries transient HTTP statuses."""
 
 
@@ -73,7 +73,7 @@ class _TooManyRequests(_RetryableResponse):
         super().__init__(f"429 for {path}")
 
 
-class RateLimitCooldown(ProviderError):
+class RateLimitCooldown(ProviderError):  # noqa: N818 - established name in logs and callers
     """The provider has imposed a cooldown longer than we are willing to wait.
 
     Deliberately **not** a subclass of :class:`_RetryableResponse`, so tenacity
@@ -140,9 +140,7 @@ class _RateLimiter:
         if self._min_interval <= 0:
             self._min_interval = 0.5
         else:
-            self._min_interval = min(
-                self._min_interval * self.BACKOFF_FACTOR, self.MAX_INTERVAL
-            )
+            self._min_interval = min(self._min_interval * self.BACKOFF_FACTOR, self.MAX_INTERVAL)
         return self._min_interval
 
     @property
@@ -188,7 +186,7 @@ class ResponseCache:
     async def get(self, key: str) -> Any | None:
         try:
             raw = await self._redis.get(key)
-        except Exception as exc:  # noqa: BLE001 - cache must never be fatal
+        except Exception as exc:
             logger.warning("provider cache read failed", extra={"error": str(exc)})
             return None
         if raw is None:
@@ -203,7 +201,7 @@ class ResponseCache:
             return
         try:
             await self._redis.set(key, json.dumps(value), ex=self._ttl)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             logger.warning("provider cache write failed", extra={"error": str(exc)})
 
 
@@ -266,10 +264,7 @@ class EuroLeagueProvider:
     # -- transport ---------------------------------------------------------
 
     def _season_path(self, season: SeasonRef, suffix: str = "") -> str:
-        return (
-            f"/competitions/{season.competition_code}"
-            f"/seasons/{season.season_code}{suffix}"
-        )
+        return f"/competitions/{season.competition_code}/seasons/{season.season_code}{suffix}"
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         """Fetch and decode JSON, with caching, rate limiting and retries.
@@ -297,9 +292,7 @@ class EuroLeagueProvider:
         except _RetryableResponse as exc:
             raise ProviderError(self.provider_key, f"{exc} (retries exhausted)") from exc
         except httpx.TransportError as exc:
-            raise ProviderError(
-                self.provider_key, f"transport failure on {path}: {exc}"
-            ) from exc
+            raise ProviderError(self.provider_key, f"transport failure on {path}: {exc}") from exc
 
         if self._cache is not None:
             await self._cache.set(cache_key, payload)
@@ -345,7 +338,9 @@ class EuroLeagueProvider:
                 raise RateLimitCooldown(self.provider_key, retry_after)
 
             if retry_after:
-                await asyncio.sleep(retry_after if self._wait_out_cooldowns else min(retry_after, max_wait))
+                await asyncio.sleep(
+                    retry_after if self._wait_out_cooldowns else min(retry_after, max_wait)
+                )
             raise _TooManyRequests(path, retry_after)
 
         if response.status_code in _RETRYABLE_STATUS:
@@ -359,9 +354,7 @@ class EuroLeagueProvider:
             return None
 
         if response.is_error:
-            raise ProviderError(
-                self.provider_key, f"HTTP {response.status_code} for {path}"
-            )
+            raise ProviderError(self.provider_key, f"HTTP {response.status_code} for {path}")
 
         try:
             return response.json()
@@ -428,9 +421,7 @@ class EuroLeagueProvider:
         raw_count = 0
 
         for team in teams:
-            rows = await self._get(
-                self._season_path(season, f"/clubs/{team.code}/people")
-            )
+            rows = await self._get(self._season_path(season, f"/clubs/{team.code}/people"))
             # This endpoint returns a bare array, not the usual {"data": [...]}.
             if isinstance(rows, dict):
                 rows = rows.get("data")
@@ -490,9 +481,7 @@ class EuroLeagueProvider:
         )
         return games
 
-    async def fetch_game_stats(
-        self, season: SeasonRef, game_code: int
-    ) -> GameStatsDTO | None:
+    async def fetch_game_stats(self, season: SeasonRef, game_code: int) -> GameStatsDTO | None:
         payload = await self._get(self._season_path(season, f"/games/{game_code}/stats"))
         if not isinstance(payload, dict):
             return None
@@ -512,7 +501,7 @@ def build_response_cache(settings: Settings | None = None) -> ResponseCache | No
         from redis.asyncio import Redis  # imported lazily: optional at runtime
 
         client = Redis.from_url(str(resolved.redis_url), decode_responses=True)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("redis unavailable, provider cache disabled", extra={"error": str(exc)})
         return None
     return ResponseCache(client, resolved.provider_cache_ttl_seconds)

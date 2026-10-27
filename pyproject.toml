@@ -39,8 +39,10 @@ dev = [
     "pytest>=8.3",
     "pytest-asyncio>=0.24",
     "pytest-cov>=6.0",
-    "ruff>=0.8",
-    "mypy>=1.13",
+    # Pinned: CI blocks on lint and types, so a new release with new rules
+    # must arrive as a deliberate bump, not as a red build on an unrelated change.
+    "ruff==0.17.3",
+    "mypy==2.4.0",
     "asgi-lifespan>=2.1",
 ]
 
@@ -75,11 +77,23 @@ select = [
 ]
 ignore = [
     "B008",  # FastAPI Depends() in defaults is the documented idiom
+    # Moving typing-only imports under TYPE_CHECKING is unsafe here: SQLAlchemy
+    # (Mapped[...]), pydantic, FastAPI and Typer read annotations at runtime, and
+    # a model or command whose annotation names a hidden import breaks on import.
+    "TC001",
+    "TC002",
+    "TC003",
 ]
+# News text arrives with typographic dashes and quotes, and the extractor and its
+# tests match them on purpose.
+allowed-confusables = ["–", "’", "ſ"]
 
 [tool.ruff.lint.per-file-ignores]
-"backend/tests/*" = ["S101"]
+# Test fixtures quote real article text and HTML verbatim.
+"backend/tests/*" = ["S101", "E501"]
 "backend/migrations/versions/*" = ["E501", "N999"]
+# `UUID as PgUUID` keeps the column type apart from uuid.UUID: SQLAlchemy idiom.
+"backend/src/euroleague_ai/models/*" = ["N811"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["euroleague_ai"]

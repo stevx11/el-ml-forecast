@@ -41,7 +41,7 @@ def rotation() -> tuple[list[uuid.UUID], uuid.UUID, dict, list[FakeAppearance]]:
     """
     guards = [uuid.uuid4() for _ in range(5)]
     centre = uuid.uuid4()
-    positions = {guard: "GUARD" for guard in guards}
+    positions = dict.fromkeys(guards, "GUARD")
     positions[centre] = "CENTER"
 
     appearances: list[FakeAppearance] = []
@@ -81,9 +81,9 @@ class TestPeckingOrder:
     def test_minutes_share_separates_the_group(self, rotation) -> None:
         guards, _, positions, appearances = rotation
         shares = [
-            summarise_position(
-                player_id=guard, positions=positions, appearances=appearances
-            )["same_position_minutes_share"]
+            summarise_position(player_id=guard, positions=positions, appearances=appearances)[
+                "same_position_minutes_share"
+            ]
             for guard in guards
         ]
         assert shares == sorted(shares, reverse=True)
@@ -93,9 +93,9 @@ class TestPeckingOrder:
         """The budget property: a position group's minutes are divided, not created."""
         guards, _, positions, appearances = rotation
         total = sum(
-            summarise_position(
-                player_id=guard, positions=positions, appearances=appearances
-            )["same_position_minutes_share"]
+            summarise_position(player_id=guard, positions=positions, appearances=appearances)[
+                "same_position_minutes_share"
+            ]
             for guard in guards
         )
         assert total == pytest.approx(1.0)
@@ -111,9 +111,7 @@ class TestGroupMembership:
 
     def test_a_lone_centre_competes_with_nobody(self, rotation) -> None:
         _, centre, positions, appearances = rotation
-        result = summarise_position(
-            player_id=centre, positions=positions, appearances=appearances
-        )
+        result = summarise_position(player_id=centre, positions=positions, appearances=appearances)
         assert result["same_position_count"] == 1.0
         assert result["same_position_minutes_share"] == pytest.approx(1.0)
 
@@ -126,18 +124,14 @@ class TestGroupMembership:
         before = summarise_position(
             player_id=guards[0], positions=positions, appearances=appearances
         )
-        after = summarise_position(
-            player_id=guards[0], positions=crowded, appearances=appearances
-        )
+        after = summarise_position(player_id=guards[0], positions=crowded, appearances=appearances)
         assert after["same_position_count"] == before["same_position_count"] + 1
 
     def test_a_player_who_has_never_featured_ranks_last(self, rotation) -> None:
-        guards, _, positions, appearances = rotation
+        _, _, positions, appearances = rotation
         newcomer = uuid.uuid4()
         crowded = {**positions, newcomer: "GUARD"}
-        result = summarise_position(
-            player_id=newcomer, positions=crowded, appearances=appearances
-        )
+        result = summarise_position(player_id=newcomer, positions=crowded, appearances=appearances)
         assert result["same_position_rank"] == 6.0
         assert result["same_position_minutes_share"] == pytest.approx(0.0)
 
@@ -149,12 +143,8 @@ class TestDidNotPlay:
         Dropping those rows would raise his average and flatter him.
         """
         guards, _, positions, appearances = rotation
-        padded = appearances + [
-            FakeAppearance(guards[4], 0, did_not_play=True) for _ in range(5)
-        ]
-        result = summarise_position(
-            player_id=guards[4], positions=positions, appearances=padded
-        )
+        padded = appearances + [FakeAppearance(guards[4], 0, did_not_play=True) for _ in range(5)]
+        result = summarise_position(player_id=guards[4], positions=positions, appearances=padded)
         assert result["same_position_rank"] == 5.0
 
 
@@ -164,9 +154,7 @@ class TestPositionFlags:
         guard = summarise_position(
             player_id=guards[0], positions=positions, appearances=appearances
         )
-        big = summarise_position(
-            player_id=centre, positions=positions, appearances=appearances
-        )
+        big = summarise_position(player_id=centre, positions=positions, appearances=appearances)
         assert guard["position_guard"] == 1.0
         assert guard["position_center"] == 0.0
         assert big["position_center"] == 1.0

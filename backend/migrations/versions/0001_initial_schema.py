@@ -91,8 +91,12 @@ def _uuid_pk() -> sa.Column:
 def _timestamps() -> list[sa.Column]:
     """Row bookkeeping. Audit only -- never read by features."""
     return [
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), server_default=sa.func.now(), nullable=False
+        ),
     ]
 
 
@@ -205,7 +209,9 @@ def upgrade() -> None:
         sa.Column("display_name", sa.String(160), nullable=False),
         *_timestamps(),
         sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_team_seasons_team_id_teams"),
-        sa.ForeignKeyConstraint(["season_id"], ["seasons.id"], name="fk_team_seasons_season_id_seasons"),
+        sa.ForeignKeyConstraint(
+            ["season_id"], ["seasons.id"], name="fk_team_seasons_season_id_seasons"
+        ),
         sa.UniqueConstraint("team_id", "season_id", name="uq_team_seasons_team_season"),
     )
     op.create_index("ix_team_seasons_season", "team_seasons", ["season_id"])
@@ -242,21 +248,33 @@ def upgrade() -> None:
         sa.Column("effective_until", sa.DateTime(timezone=True), nullable=True),
         _observed_at(),
         *_timestamps(),
-        sa.ForeignKeyConstraint(["player_id"], ["players.id"], name="fk_player_team_stints_player_id_players"),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_player_team_stints_team_id_teams"),
-        sa.ForeignKeyConstraint(["season_id"], ["seasons.id"], name="fk_player_team_stints_season_id_seasons"),
+        sa.ForeignKeyConstraint(
+            ["player_id"], ["players.id"], name="fk_player_team_stints_player_id_players"
+        ),
+        sa.ForeignKeyConstraint(
+            ["team_id"], ["teams.id"], name="fk_player_team_stints_team_id_teams"
+        ),
+        sa.ForeignKeyConstraint(
+            ["season_id"], ["seasons.id"], name="fk_player_team_stints_season_id_seasons"
+        ),
         sa.CheckConstraint(
             "effective_until IS NULL OR effective_until > effective_from",
             name="effective_interval_valid",
         ),
     )
     op.create_index("ix_player_team_stints_observed_at", "player_team_stints", ["observed_at"])
-    op.create_index("ix_player_team_stints_effective_from", "player_team_stints", ["effective_from"])
-    op.create_index("ix_player_team_stints_effective_until", "player_team_stints", ["effective_until"])
+    op.create_index(
+        "ix_player_team_stints_effective_from", "player_team_stints", ["effective_from"]
+    )
+    op.create_index(
+        "ix_player_team_stints_effective_until", "player_team_stints", ["effective_until"]
+    )
     op.create_index(
         "ix_player_team_stints_player_from", "player_team_stints", ["player_id", "effective_from"]
     )
-    op.create_index("ix_player_team_stints_team_season", "player_team_stints", ["team_id", "season_id"])
+    op.create_index(
+        "ix_player_team_stints_team_season", "player_team_stints", ["team_id", "season_id"]
+    )
 
     op.create_table(
         "team_coach_stints",
@@ -268,9 +286,15 @@ def upgrade() -> None:
         sa.Column("effective_until", sa.DateTime(timezone=True), nullable=True),
         _observed_at(),
         *_timestamps(),
-        sa.ForeignKeyConstraint(["coach_id"], ["coaches.id"], name="fk_team_coach_stints_coach_id_coaches"),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_team_coach_stints_team_id_teams"),
-        sa.ForeignKeyConstraint(["season_id"], ["seasons.id"], name="fk_team_coach_stints_season_id_seasons"),
+        sa.ForeignKeyConstraint(
+            ["coach_id"], ["coaches.id"], name="fk_team_coach_stints_coach_id_coaches"
+        ),
+        sa.ForeignKeyConstraint(
+            ["team_id"], ["teams.id"], name="fk_team_coach_stints_team_id_teams"
+        ),
+        sa.ForeignKeyConstraint(
+            ["season_id"], ["seasons.id"], name="fk_team_coach_stints_season_id_seasons"
+        ),
         sa.CheckConstraint(
             "effective_until IS NULL OR effective_until > effective_from",
             name="effective_interval_valid",
@@ -278,8 +302,12 @@ def upgrade() -> None:
     )
     op.create_index("ix_team_coach_stints_observed_at", "team_coach_stints", ["observed_at"])
     op.create_index("ix_team_coach_stints_effective_from", "team_coach_stints", ["effective_from"])
-    op.create_index("ix_team_coach_stints_effective_until", "team_coach_stints", ["effective_until"])
-    op.create_index("ix_team_coach_stints_team_from", "team_coach_stints", ["team_id", "effective_from"])
+    op.create_index(
+        "ix_team_coach_stints_effective_until", "team_coach_stints", ["effective_until"]
+    )
+    op.create_index(
+        "ix_team_coach_stints_team_from", "team_coach_stints", ["team_id", "effective_from"]
+    )
 
     # ---------------------------------------------------------------- games
     op.create_table(
@@ -332,7 +360,9 @@ def upgrade() -> None:
             ["game_id"], ["games.id"], name="fk_game_teams_game_id_games", ondelete="CASCADE"
         ),
         sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_game_teams_team_id_teams"),
-        sa.ForeignKeyConstraint(["coach_id"], ["coaches.id"], name="fk_game_teams_coach_id_coaches"),
+        sa.ForeignKeyConstraint(
+            ["coach_id"], ["coaches.id"], name="fk_game_teams_coach_id_coaches"
+        ),
         sa.UniqueConstraint("game_id", "side", name="uq_game_teams_game_side"),
     )
     op.create_index("ix_game_teams_game_id", "game_teams", ["game_id"])
@@ -356,7 +386,9 @@ def upgrade() -> None:
             name="fk_player_game_stats_game_team_id_game_teams",
             ondelete="CASCADE",
         ),
-        sa.ForeignKeyConstraint(["player_id"], ["players.id"], name="fk_player_game_stats_player_id_players"),
+        sa.ForeignKeyConstraint(
+            ["player_id"], ["players.id"], name="fk_player_game_stats_player_id_players"
+        ),
         sa.UniqueConstraint("game_team_id", "player_id", name="uq_player_game_stats_team_player"),
         sa.CheckConstraint("seconds_played >= 0", name="seconds_played_non_negative"),
     )
@@ -427,7 +459,9 @@ def upgrade() -> None:
         sa.Column("event_type", _enum("newseventtype"), nullable=False),
         sa.Column("player_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("team_id", postgresql.UUID(as_uuid=True), nullable=True),
-        sa.Column("payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default="{}"),
+        sa.Column(
+            "payload", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default="{}"
+        ),
         sa.Column("confidence", sa.Numeric(4, 3), nullable=False),
         sa.Column("extraction_model", sa.String(128), nullable=True),
         sa.Column("event_timestamp", sa.DateTime(timezone=True), nullable=False),
@@ -436,7 +470,9 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["article_id"], ["news_articles.id"], name="fk_news_events_article_id_news_articles"
         ),
-        sa.ForeignKeyConstraint(["player_id"], ["players.id"], name="fk_news_events_player_id_players"),
+        sa.ForeignKeyConstraint(
+            ["player_id"], ["players.id"], name="fk_news_events_player_id_players"
+        ),
         sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_news_events_team_id_teams"),
         sa.CheckConstraint(
             "confidence >= 0 AND confidence <= 1", name="confidence_in_unit_interval"
@@ -457,7 +493,9 @@ def upgrade() -> None:
         sa.Column("reason", sa.String(512), nullable=True),
         sa.Column("injury_type", sa.String(128), nullable=True),
         sa.Column("expected_return_date", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("source_type", _enum("statussourcetype"), nullable=False, server_default="PROVIDER"),
+        sa.Column(
+            "source_type", _enum("statussourcetype"), nullable=False, server_default="PROVIDER"
+        ),
         sa.Column("source_article_id", postgresql.UUID(as_uuid=True), nullable=True),
         sa.Column("confidence", sa.Numeric(4, 3), nullable=True),
         sa.Column("event_timestamp", sa.DateTime(timezone=True), nullable=False),
@@ -466,8 +504,12 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["player_id"], ["players.id"], name="fk_player_status_events_player_id_players"
         ),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_player_status_events_team_id_teams"),
-        sa.ForeignKeyConstraint(["game_id"], ["games.id"], name="fk_player_status_events_game_id_games"),
+        sa.ForeignKeyConstraint(
+            ["team_id"], ["teams.id"], name="fk_player_status_events_team_id_teams"
+        ),
+        sa.ForeignKeyConstraint(
+            ["game_id"], ["games.id"], name="fk_player_status_events_game_id_games"
+        ),
         sa.ForeignKeyConstraint(
             ["source_article_id"],
             ["news_articles.id"],
@@ -479,7 +521,9 @@ def upgrade() -> None:
         ),
     )
     op.create_index("ix_player_status_events_observed_at", "player_status_events", ["observed_at"])
-    op.create_index("ix_player_status_events_event_timestamp", "player_status_events", ["event_timestamp"])
+    op.create_index(
+        "ix_player_status_events_event_timestamp", "player_status_events", ["event_timestamp"]
+    )
     # Backs "latest known status for this player as of T", the dominant query.
     op.create_index(
         "ix_player_status_events_player_observed",
@@ -496,16 +540,24 @@ def upgrade() -> None:
         sa.Column("player_id", postgresql.UUID(as_uuid=True), nullable=False),
         sa.Column("is_confirmed", sa.Boolean(), nullable=False, server_default=sa.false()),
         sa.Column("announced_at", sa.DateTime(timezone=True), nullable=False),
-        sa.Column("source_type", _enum("statussourcetype"), nullable=False, server_default="PROVIDER"),
+        sa.Column(
+            "source_type", _enum("statussourcetype"), nullable=False, server_default="PROVIDER"
+        ),
         _observed_at(),
         *_timestamps(),
-        sa.ForeignKeyConstraint(["game_id"], ["games.id"], name="fk_starting_lineup_entries_game_id_games"),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_starting_lineup_entries_team_id_teams"),
+        sa.ForeignKeyConstraint(
+            ["game_id"], ["games.id"], name="fk_starting_lineup_entries_game_id_games"
+        ),
+        sa.ForeignKeyConstraint(
+            ["team_id"], ["teams.id"], name="fk_starting_lineup_entries_team_id_teams"
+        ),
         sa.ForeignKeyConstraint(
             ["player_id"], ["players.id"], name="fk_starting_lineup_entries_player_id_players"
         ),
     )
-    op.create_index("ix_starting_lineup_entries_observed_at", "starting_lineup_entries", ["observed_at"])
+    op.create_index(
+        "ix_starting_lineup_entries_observed_at", "starting_lineup_entries", ["observed_at"]
+    )
     op.create_index(
         "ix_starting_lineup_game_team_observed",
         "starting_lineup_entries",
@@ -528,10 +580,16 @@ def upgrade() -> None:
         sa.ForeignKeyConstraint(
             ["player_id"], ["players.id"], name="fk_player_feature_snapshots_player_id_players"
         ),
-        sa.ForeignKeyConstraint(["game_id"], ["games.id"], name="fk_player_feature_snapshots_game_id_games"),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_player_feature_snapshots_team_id_teams"),
         sa.ForeignKeyConstraint(
-            ["opponent_team_id"], ["teams.id"], name="fk_player_feature_snapshots_opponent_team_id_teams"
+            ["game_id"], ["games.id"], name="fk_player_feature_snapshots_game_id_games"
+        ),
+        sa.ForeignKeyConstraint(
+            ["team_id"], ["teams.id"], name="fk_player_feature_snapshots_team_id_teams"
+        ),
+        sa.ForeignKeyConstraint(
+            ["opponent_team_id"],
+            ["teams.id"],
+            name="fk_player_feature_snapshots_opponent_team_id_teams",
         ),
         sa.UniqueConstraint(
             "player_id",
@@ -564,10 +622,16 @@ def upgrade() -> None:
         sa.Column("features", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         sa.Column("computed_at", sa.DateTime(timezone=True), nullable=False),
         *_timestamps(),
-        sa.ForeignKeyConstraint(["team_id"], ["teams.id"], name="fk_team_feature_snapshots_team_id_teams"),
-        sa.ForeignKeyConstraint(["game_id"], ["games.id"], name="fk_team_feature_snapshots_game_id_games"),
         sa.ForeignKeyConstraint(
-            ["opponent_team_id"], ["teams.id"], name="fk_team_feature_snapshots_opponent_team_id_teams"
+            ["team_id"], ["teams.id"], name="fk_team_feature_snapshots_team_id_teams"
+        ),
+        sa.ForeignKeyConstraint(
+            ["game_id"], ["games.id"], name="fk_team_feature_snapshots_game_id_games"
+        ),
+        sa.ForeignKeyConstraint(
+            ["opponent_team_id"],
+            ["teams.id"],
+            name="fk_team_feature_snapshots_opponent_team_id_teams",
         ),
         sa.UniqueConstraint(
             "team_id",
@@ -594,10 +658,15 @@ def upgrade() -> None:
         sa.Column("algorithm", sa.String(64), nullable=False),
         sa.Column("feature_set_version", sa.String(32), nullable=False),
         sa.Column(
-            "hyperparameters", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default="{}"
+            "hyperparameters",
+            postgresql.JSONB(astext_type=sa.Text()),
+            nullable=False,
+            server_default="{}",
         ),
         sa.Column("training_data_hash", sa.String(64), nullable=True),
-        sa.Column("metrics", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default="{}"),
+        sa.Column(
+            "metrics", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default="{}"
+        ),
         sa.Column("trained_at", sa.DateTime(timezone=True), nullable=True),
         sa.Column("artifact_path", sa.String(512), nullable=True),
         sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.false()),
@@ -617,12 +686,16 @@ def upgrade() -> None:
         sa.Column("predicted_value", sa.Float(), nullable=False),
         sa.Column("predicted_std", sa.Float(), nullable=True),
         sa.Column("quantiles", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
-        sa.Column("threshold_probabilities", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
+        sa.Column(
+            "threshold_probabilities", postgresql.JSONB(astext_type=sa.Text()), nullable=True
+        ),
         sa.Column("explanation", postgresql.JSONB(astext_type=sa.Text()), nullable=True),
         sa.Column("prediction_timestamp", sa.DateTime(timezone=True), nullable=False),
         *_timestamps(),
         sa.ForeignKeyConstraint(
-            ["model_version_id"], ["model_versions.id"], name="fk_predictions_model_version_id_model_versions"
+            ["model_version_id"],
+            ["model_versions.id"],
+            name="fk_predictions_model_version_id_model_versions",
         ),
         sa.ForeignKeyConstraint(
             ["player_feature_snapshot_id"],
@@ -632,7 +705,9 @@ def upgrade() -> None:
             # in sync with the explicit name on the ORM column.
             name="fk_predictions_player_feature_snapshot_id",
         ),
-        sa.ForeignKeyConstraint(["player_id"], ["players.id"], name="fk_predictions_player_id_players"),
+        sa.ForeignKeyConstraint(
+            ["player_id"], ["players.id"], name="fk_predictions_player_id_players"
+        ),
         sa.ForeignKeyConstraint(["game_id"], ["games.id"], name="fk_predictions_game_id_games"),
         sa.UniqueConstraint(
             "model_version_id",
@@ -645,7 +720,9 @@ def upgrade() -> None:
     )
     op.create_index("ix_predictions_prediction_timestamp", "predictions", ["prediction_timestamp"])
     op.create_index("ix_predictions_game_target", "predictions", ["game_id", "target"])
-    op.create_index("ix_predictions_player_ts", "predictions", ["player_id", "prediction_timestamp"])
+    op.create_index(
+        "ix_predictions_player_ts", "predictions", ["player_id", "prediction_timestamp"]
+    )
 
     op.create_table(
         "prediction_outcomes",
@@ -657,7 +734,9 @@ def upgrade() -> None:
         sa.Column("evaluated_at", sa.DateTime(timezone=True), nullable=False),
         *_timestamps(),
         sa.ForeignKeyConstraint(
-            ["prediction_id"], ["predictions.id"], name="fk_prediction_outcomes_prediction_id_predictions"
+            ["prediction_id"],
+            ["predictions.id"],
+            name="fk_prediction_outcomes_prediction_id_predictions",
         ),
         sa.UniqueConstraint("prediction_id", name="uq_prediction_outcomes_prediction"),
     )
@@ -675,7 +754,9 @@ def upgrade() -> None:
         sa.Column("rows_read", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("rows_written", sa.Integer(), nullable=False, server_default="0"),
         sa.Column("error_message", sa.Text(), nullable=True),
-        sa.Column("details", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default="{}"),
+        sa.Column(
+            "details", postgresql.JSONB(astext_type=sa.Text()), nullable=False, server_default="{}"
+        ),
         *_timestamps(),
     )
     op.create_index("ix_ingestion_runs_job_started", "ingestion_runs", ["job_name", "started_at"])

@@ -58,9 +58,7 @@ class RecentAppearances:
     debuted: frozenset[uuid.UUID] = frozenset()
 
 
-async def current_club(
-    session: AsyncSession, *, as_of: datetime
-) -> dict[uuid.UUID, uuid.UUID]:
+async def current_club(session: AsyncSession, *, as_of: datetime) -> dict[uuid.UUID, uuid.UUID]:
     """Map every player to the club they belonged to at ``as_of``.
 
     **This has to be transfer-aware.** Scoping roster lookups to one season is
@@ -196,9 +194,7 @@ async def recent_appearances(
     return RecentAppearances(team_games=len(recent_ids), played=played, debuted=debuted)
 
 
-def select_candidates(
-    rostered: set[uuid.UUID], appearances: RecentAppearances
-) -> list[uuid.UUID]:
+def select_candidates(rostered: set[uuid.UUID], appearances: RecentAppearances) -> list[uuid.UUID]:
     """The pure part of :func:`candidate_players`, separated so it can be unit-tested.
 
     Keeps club-correct players who played recently, plus club-correct players
@@ -245,9 +241,7 @@ async def candidate_players(
     if club_by_player is None:
         club_by_player = await current_club(session, as_of=as_of)
 
-    rostered = {
-        player_id for player_id, club_id in club_by_player.items() if club_id == team_id
-    }
+    rostered = {player_id for player_id, club_id in club_by_player.items() if club_id == team_id}
     if not rostered:
         return []
 
