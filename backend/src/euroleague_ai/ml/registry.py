@@ -14,6 +14,7 @@ everything works -- but nothing will serve it.
 from __future__ import annotations
 
 import json
+import math
 import uuid
 from pathlib import Path
 from typing import Any
@@ -125,6 +126,18 @@ async def next_version(session: AsyncSession, name: str) -> str:
     return f"{major}.{minor}.{patch + 1}"
 
 
+def _json_safe(value: Any) -> Any:
+    """NaN and infinity as null: JSONB rejects them, and an empty stratum (no
+    test rows in some minutes band) produces NaN metrics."""
+    if isinstance(value, float):
+        return value if math.isfinite(value) else None
+    if isinstance(value, dict):
+        return {k: _json_safe(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_safe(v) for v in value]
+    return value
+
+
 async def register_model(
     session: AsyncSession,
     result: TrainingResult,
@@ -133,6 +146,7 @@ async def register_model(
     artifact_root: Path | None = None,
     clock: Clock | None = None,
     activate: bool | None = None,
+    season_gate: dict[str, Any] | None = None,
 ) -> ModelVersion:
     """Persist a trained model and, if it passed the gate, activate it.
 
@@ -140,6 +154,9 @@ async def register_model(
         activate: Override the gate. ``None`` means "activate iff it beat the
             baseline", which is what you want; passing ``True`` to publish a
             losing model is possible but deliberate.
+        season_gate: The walk-forward verdict from
+            :func:`euroleague_ai.ml.walkforward.season_gate`. When it was able
+            to judge, it must pass too; either way it is stored with the model.
     """
     clock = clock or SystemClock()
     name = model_name_for(result.target)
@@ -147,7 +164,10 @@ async def register_model(
 
     artifact_path = save_artifact(result, name=name, version=version, root=artifact_root)
 
-    should_activate = result.beats_baseline if activate is None else activate
+    passes = result.beats_baseline
+    if season_gate is not None and season_gate.get("judged"):
+        passes = passes and bool(season_gate.get("passes"))
+    should_activate = passes if activate is None else activate
 
     metrics: dict[str, Any] = {
         **result.summary(),
@@ -163,6 +183,7 @@ async def register_model(
         "top_features": result.feature_importance[:15],
         "seasons": result.seasons,
         "suspicious": suspiciously_good(result),
+        "season_gate": season_gate,
     }
 
     model_version = ModelVersion(
@@ -174,7 +195,7 @@ async def register_model(
         feature_set_version=feature_set_version,
         hyperparameters={**result.params, "best_iteration": result.best_iteration},
         training_data_hash=result.training_data_hash,
-        metrics=metrics,
+        metrics=_json_safe(metrics),
         trained_at=clock.now(),
         artifact_path=str(artifact_path),
         is_active=should_activate,

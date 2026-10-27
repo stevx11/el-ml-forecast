@@ -130,3 +130,49 @@ class TestEvaluate:
         )
         (fold,) = result.folds
         assert fold.median_rmse is not None and fold.expected_rmse is not None
+
+
+def _fold(season: str, model: float, baseline: float, *, partial: bool = False):
+    from euroleague_ai.ml.walkforward import FoldResult
+
+    return FoldResult(
+        season=season, partial=partial, train_rows=1000, test_rows=500,
+        model_mae=model, baseline=baseline_name, baseline_mae=baseline, bias=0.0, covered_80=0.8,
+    )
+
+
+baseline_name = "season_mean"
+
+
+class TestSeasonGate:
+    def _gate(self, *folds):
+        from euroleague_ai.ml.walkforward import TargetWalkForward, season_gate
+
+        return season_gate(TargetWalkForward(PredictionTarget.POINTS, list(folds)))
+
+    def test_passes_when_it_wins_most_complete_seasons(self) -> None:
+        gate = self._gate(_fold("E2023", 3.9, 4.0), _fold("E2024", 4.1, 4.0), _fold("E2025", 3.8, 4.0))
+        assert gate["judged"] and gate["passes"]
+        assert (gate["complete_seasons"], gate["beats_baseline"]) == (3, 2)
+
+    def test_fails_when_it_loses_most_seasons_even_if_one_win_is_big(self) -> None:
+        gate = self._gate(_fold("E2023", 3.0, 4.0), _fold("E2024", 4.1, 4.0), _fold("E2025", 4.05, 4.0))
+        assert gate["judged"] and not gate["passes"]
+
+    def test_the_partial_season_does_not_vote(self) -> None:
+        gate = self._gate(
+            _fold("E2024", 4.1, 4.0), _fold("E2025", 4.1, 4.0), _fold("E2026", 2.0, 4.0, partial=True)
+        )
+        assert gate["complete_seasons"] == 2 and not gate["passes"]
+        assert len(gate["seasons"]) == 3  # still shown
+
+    def test_too_few_seasons_is_not_judged(self) -> None:
+        gate = self._gate(_fold("E2025", 3.9, 4.0), _fold("E2026", 3.9, 4.0, partial=True))
+        assert not gate["judged"] and gate["passes"] is None
+        assert "1 complete" in gate["reason"]
+
+    def test_a_tie_is_not_a_majority(self) -> None:
+        gate = self._gate(
+            _fold("E2022", 3.9, 4.0), _fold("E2023", 4.1, 4.0), _fold("E2024", 3.9, 4.0), _fold("E2025", 4.1, 4.0)
+        )
+        assert not gate["passes"]

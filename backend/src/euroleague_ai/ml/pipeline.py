@@ -32,6 +32,9 @@ async def train_and_register(
     artifact_root: Path | None = None,
     params: dict[str, Any] | None = None,
     activate: bool | None = None,
+    walkforward: bool = True,
+    walkforward_seasons: int = 4,
+    current_season: str | None = None,
 ) -> dict[str, Any]:
     """Train each target in order and register the results.
 
@@ -81,12 +84,27 @@ async def train_and_register(
                 tuned_note = "tuned"
 
         result = train_target(rows, target, params=resolved_params)
+        gate: dict[str, Any] | None = None
+        if walkforward:
+            # The same training, once per recent season: activation needs the
+            # gain to hold season after season, not just on the one split.
+            from euroleague_ai.ml.walkforward import evaluate_target, season_gate
+
+            folds = evaluate_target(
+                rows,
+                target,
+                seasons=walkforward_seasons,
+                current_season=current_season,
+                params=resolved_params,
+            )
+            gate = season_gate(folds)
         model_version = await register_model(
             session,
             result,
             feature_set_version=feature_set_version,
             artifact_root=artifact_root,
             activate=activate,
+            season_gate=gate,
         )
 
         report["targets"][str(target)] = {
@@ -95,6 +113,7 @@ async def train_and_register(
             "by_minutes": result.by_minutes,
             "top_features": result.feature_importance[:15],
             "params_source": tuned_note,
+            "season_gate": gate,
             "model": {
                 "name": model_version.name,
                 "version": model_version.version,

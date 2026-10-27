@@ -235,6 +235,48 @@ def evaluate_target(
     return result
 
 
+#: A gate needs at least this many complete seasons to judge. With fewer, the
+#: single 70/15/15 split is all there is, and the caller falls back to it.
+MIN_GATE_SEASONS = 2
+
+
+def season_gate(result: TargetWalkForward, *, min_seasons: int = MIN_GATE_SEASONS) -> dict[str, Any]:
+    """Activation rule from the per-season folds.
+
+    Judged on complete seasons only: the season still being played is shown but
+    is too short to vote. Passes when the model beats the baseline in more than
+    half of them and its median gain is positive. A model that wins on the one
+    production split but loses most seasons is noise that happened to suit
+    that split.
+    """
+    complete = [f for f in result.folds if not f.partial and math.isfinite(f.improvement)]
+    gains = [f.improvement * 100 for f in complete]
+    wins = sum(f.beats_baseline for f in complete)
+    base = {
+        "complete_seasons": len(complete),
+        "beats_baseline": wins,
+        "median_improvement_pct": round(statistics.median(gains), 2) if gains else None,
+        "seasons": [f.to_dict() for f in result.folds],
+    }
+    if len(complete) < min_seasons:
+        return {
+            **base,
+            "judged": False,
+            "passes": None,
+            "reason": f"only {len(complete)} complete season(s); need {min_seasons}",
+        }
+    passes = wins * 2 > len(complete) and statistics.median(gains) > 0
+    return {
+        **base,
+        "judged": True,
+        "passes": passes,
+        "reason": (
+            f"beats the baseline in {wins}/{len(complete)} complete seasons, "
+            f"median {statistics.median(gains):+.2f}%"
+        ),
+    }
+
+
 def save_report(
     results: list[TargetWalkForward],
     *,

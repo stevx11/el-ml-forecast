@@ -1811,6 +1811,30 @@ def cmd_ml_walkforward(
     typer.echo(f"  saved: {path}")
 
 
+def _print_season_gate(gate: Any) -> None:
+    """One line per recent season, then the verdict."""
+    if gate is None:
+        typer.echo("    per season   skipped (--no-walkforward): single-split gate only")
+        return
+    for fold in gate.get("seasons") or []:
+        mark = "*" if fold.get("partial") else " "
+        typer.secho(
+            f"      {fold['season']}{mark}  {fold['improvement_pct']:+6.2f}%  "
+            f"(MAE {fold['model_mae']:.4f} vs {fold['baseline_mae']:.4f}, "
+            f"{fold['test_rows']:,} rows)",
+            fg=None if fold.get("beats_baseline") else typer.colors.RED,
+        )
+    if not gate.get("judged"):
+        typer.secho(f"    per season   not judged: {gate['reason']}", fg=typer.colors.YELLOW)
+        return
+    ok = bool(gate.get("passes"))
+    typer.secho(
+        f"    per season   {gate['reason']}   {'PASS' if ok else 'FAIL'}",
+        fg=typer.colors.GREEN if ok else typer.colors.RED,
+        bold=True,
+    )
+
+
 @ml_app.command("train")
 def cmd_ml_train(
     target: Annotated[
@@ -1831,6 +1855,13 @@ def cmd_ml_train(
             help="Override the gate. Default: activate only if it beats the baseline.",
         ),
     ] = None,
+    walkforward: Annotated[
+        bool,
+        typer.Option(
+            "--walkforward/--no-walkforward",
+            help="Also require the gain to hold season by season (slow). Default on.",
+        ),
+    ] = True,
 ) -> None:
     """Train LightGBM models and register them.
 
@@ -1862,7 +1893,12 @@ def cmd_ml_train(
     async def job() -> object:
         async with session_scope() as session:
             return await train_and_register(
-                session, targets=targets, season_codes=codes, activate=activate
+                session,
+                targets=targets,
+                season_codes=codes,
+                activate=activate,
+                walkforward=walkforward,
+                current_season=_season_default(),
             )
 
     report = _run(job)
@@ -1885,7 +1921,8 @@ def cmd_ml_train(
 
         s = block["summary"]
         ok = s["beats_baseline"]
-        passed, failed = (passed + 1, failed) if ok else (passed, failed + 1)
+        active = bool((block.get("model") or {}).get("active"))
+        passed, failed = (passed + 1, failed) if active else (passed, failed + 1)
 
         typer.secho(f"  {name}", fg=typer.colors.CYAN, bold=True)
         typer.echo(
@@ -1894,9 +1931,14 @@ def cmd_ml_train(
         )
         typer.echo(f"    baseline     {s['baseline_mae']:.4f}   ({s['baseline']})")
         typer.secho(
-            f"    improvement  {s['improvement_pct']:+.2f}%   "
-            f"{'PASS' if ok else 'FAIL - not activated'}",
+            f"    improvement  {s['improvement_pct']:+.2f}%   {'PASS' if ok else 'FAIL'}",
             fg=typer.colors.GREEN if ok else typer.colors.RED,
+            bold=True,
+        )
+        _print_season_gate(block.get("season_gate"))
+        typer.secho(
+            f"    {'ACTIVATED' if active else 'NOT ACTIVATED'}",
+            fg=typer.colors.GREEN if active else typer.colors.RED,
             bold=True,
         )
 
@@ -1945,11 +1987,11 @@ def cmd_ml_train(
         typer.echo(f"    top features: " + ", ".join(n for n, _ in block["top_features"][:5]))
         typer.echo(f"    artifact:     {block['model']['artifact']}")
 
-    if any(name in report["targets"] for name in ("MINUTES", "PLAYS")):
+    if report["targets"]:
         typer.echo("")
         typer.secho(
-            "Minutes or P(plays) changed: run `euroleague-ai ml reconcile` so squad "
-            "minutes are scaled for the new versions.",
+            "Models changed: run `euroleague-ai ml reconcile` so squad minutes and "
+            "stat lines are scaled for the new versions.",
             fg=typer.colors.YELLOW,
         )
     typer.echo("")

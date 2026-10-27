@@ -86,7 +86,7 @@ Run these inside the backend container with `docker compose exec backend <comman
 euroleague-ai ingest seasons --from 2016 --to 2025 --wait   # backfill history, newest first
 euroleague-ai features backfill --from 2016 --to 2025       # build as_of snapshots (incl. roster candidates)
 euroleague-ai ml baselines                                  # publish the bar to beat
-euroleague-ai ml train                                      # train all five targets, then P(plays)
+euroleague-ai ml train                                      # train all five targets, then P(plays); activates only if the gain holds season by season
 euroleague-ai news collect                                  # fetch feeds, read injuries out of articles
 euroleague-ai news injuries                                 # what was read: published date, scope, sentence
 euroleague-ai news extract --replace --days 30              # re-read stored articles after a rules change
