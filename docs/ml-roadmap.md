@@ -285,6 +285,29 @@ P(15+): 72%   P(20+): 43%   P(25+): 17%
 wrapped around a poorly calibrated mean produces confident, precise, wrong probabilities —
 strictly worse than an honest point estimate, because it invites trust it has not earned.
 
+### Per-player spreads
+
+The served distribution is the held-out residual distribution, conditioned on projected
+level and history depth. On its own that gives a streaky shooter and a steady big man
+projected for the same 12 points identical ranges. Each player's residuals are now scaled by
+his own recent swing:
+
+```
+k = clip((volatility / median volatility at his projected level) ** power, 0.5, 2.0)
+```
+
+The cells store residuals divided by `k`, and a prediction multiplies its cell's quantiles
+(and its mean residual, for the shifted-median expected value) by its own `k`. Volatility is
+the target's own `std10_<stat>`, or `std10_minutes`. Players with no recent games get
+`k = 1`.
+
+The source and the power (0.25 to 1) are chosen **on validation only**. Every candidate is
+fitted on the earlier 60% of validation and scored by quantile (pinball) loss on the later
+40%. A candidate is kept only if it beats the unscaled spread by 0.2%; otherwise the spread
+stays unscaled, exactly as before. `ml train` prints the choice, the 80% coverage per
+volatility third next to the unscaled coverage, and the Brier score of the published P(X+)
+chances next to the unscaled one. A model trained before this loads unscaled.
+
 ---
 
 ## Feature set v6

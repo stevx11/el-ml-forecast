@@ -123,6 +123,7 @@ class LoadedModel:
                     None,
                     self.distribution,
                     histories=[f.get("games_played_career_window") for f in feature_dicts],
+                    volatilities=[self.distribution.volatility_of(f) for f in feature_dicts],
                 )
             )
         return missing
@@ -193,18 +194,22 @@ class LoadedModel:
             return {}
 
         history = features.get("games_played_career_window")
+        volatility = self.distribution.volatility_of(features)
         return {
-            "quantiles": self.distribution.quantiles(predicted, history),
+            "quantiles": self.distribution.quantiles(predicted, history, volatility),
             "threshold_probabilities": {
                 # Keys are strings because this lands in JSONB, where numeric
                 # keys would come back as strings anyway.
                 str(int(threshold)): self.distribution.probability_at_least(
-                    predicted, history, threshold_cutoff(str(self.target), threshold)
+                    predicted,
+                    history,
+                    threshold_cutoff(str(self.target), threshold),
+                    volatility,
                 )
                 for threshold in thresholds_for(str(self.target))
             },
-            "predicted_std": self.distribution.spread(predicted, history),
-            "confidence": self.distribution.confidence(predicted, history),
+            "predicted_std": self.distribution.spread(predicted, history, volatility),
+            "confidence": self.distribution.confidence(predicted, history, volatility),
         }
 
 

@@ -31,11 +31,13 @@ from typing import Any
 
 from euroleague_ai.core.logging import get_logger
 from euroleague_ai.ml.baselines import default_baselines
-from euroleague_ai.ml.dataset import TrainingRow
+from euroleague_ai.ml.dataset import TARGET_FEATURE_STEMS, TrainingRow
 from euroleague_ai.ml.distribution import (
     ResidualDistribution,
+    choose_volatility_scaling,
     coverage_report,
     fit_residual_distribution,
+    volatility_features,
 )
 from euroleague_ai.ml.evaluation import Metrics, compute_metrics, stratified_metrics
 from euroleague_ai.ml.expectation import ExpectationReport, fit_expectation
@@ -124,8 +126,9 @@ class TrainingResult:
     #: estimate into quantiles and threshold probabilities at serving time.
     distribution: ResidualDistribution
     #: Interval coverage on the test split. The gate for the distribution, in
-    #: the way MAE is the gate for the point estimate.
-    coverage: dict[str, float]
+    #: the way MAE is the gate for the point estimate. Also per volatility third,
+    #: the threshold Brier score, and how the spread scaling was chosen.
+    coverage: dict[str, Any]
     #: Metrics before calibration, so the trade-off stays visible.
     raw_metrics: Metrics
     baseline_name: str
@@ -225,6 +228,44 @@ def chronological_split(
         ordered[train_size : train_size + validation_size],
         ordered[train_size + validation_size :],
     )
+
+
+def _fit_spread(
+    target: PredictionTarget,
+    medians: list[float],
+    actuals: list[float],
+    histories: list[float | None],
+    rows: list[TrainingRow],
+) -> tuple[ResidualDistribution, ResidualDistribution | None, dict[str, Any]]:
+    """The served error distribution, the unscaled one to compare, and the choice.
+
+    The volatility scale (source and power) is chosen on validation alone; see
+    :func:`~euroleague_ai.ml.distribution.choose_volatility_scaling`. When no
+    scale beats the unscaled spread, both are the same and the second is None.
+    """
+    stem = TARGET_FEATURE_STEMS.get(target)
+    candidates = (
+        {name: [row.features.get(name) for row in rows] for name in volatility_features(stem)}
+        if stem
+        else {}
+    )
+    choice = choose_volatility_scaling(medians, actuals, histories, candidates)
+    unscaled = fit_residual_distribution(medians, actuals, histories)
+    if choice.volatility_feature is None:
+        return unscaled, None, choice.as_dict()
+    scaled = fit_residual_distribution(
+        medians,
+        actuals,
+        histories,
+        candidates[choice.volatility_feature],
+        volatility_feature=choice.volatility_feature,
+        scale_power=choice.scale_power,
+    )
+    logger.info(
+        "per-player spread chosen",
+        extra={"target": str(target), **choice.as_dict()},
+    )
+    return scaled, unscaled, choice.as_dict()
 
 
 def _history_depths(rows: list[TrainingRow]) -> list[float | None]:
@@ -400,15 +441,24 @@ def train_target(
     # model nobody sees.
     calibrated_validation = [max(0.0, float(p) + offset) for p in validation_predictions]
     validation_history = _history_depths(validation_rows)
-    distribution = fit_residual_distribution(
-        calibrated_validation, [float(a) for a in y_validation], validation_history
+    validation_actuals = [float(a) for a in y_validation]
+    distribution, unscaled, scaling = _fit_spread(
+        target, calibrated_validation, validation_actuals, validation_history, validation_rows
     )
+    stem = TARGET_FEATURE_STEMS.get(target)
     coverage = coverage_report(
         distribution,
         predictions,
         [float(a) for a in y_test],
         _history_depths(test_rows),
+        volatilities=[distribution.volatility_of(row.features) for row in test_rows],
+        group_volatilities=(
+            [row.features.get(f"std10_{stem}") for row in test_rows] if stem else None
+        ),
+        target=str(target),
+        reference=unscaled,
     )
+    coverage["spread_scaling"] = scaling
 
     baseline_name, baseline_metrics = _best_baseline(test_rows, target)
 

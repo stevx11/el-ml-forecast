@@ -977,6 +977,36 @@ def cmd_quality_check() -> None:
         raise typer.Exit(code=1)
 
 
+def _print_spread_detail(coverage: dict[str, Any]) -> None:
+    """Per-player spread: what was chosen, coverage per volatility third, Brier."""
+    scaling = coverage.get("spread_scaling") or {}
+    feature = scaling.get("volatility_feature")
+    typer.echo(
+        f"    spread         scaled by {feature} ^ {scaling.get('scale_power')}"
+        if feature
+        else "    spread         unscaled (no volatility scale beat it on validation)"
+    )
+    groups = coverage.get("by_volatility") or {}
+    reference = coverage.get("reference_by_volatility") or {}
+    if groups:
+        parts = []
+        for name in ("low", "mid", "high"):
+            if name not in groups:
+                continue
+            part = f"{name} {float(groups[name]['covered_80']):.1%}"
+            if name in reference:
+                part += f" (was {float(reference[name]['covered_80']):.1%})"
+            parts.append(part)
+        typer.echo("    80% by swing   " + ", ".join(parts))
+    brier = coverage.get("threshold_brier")
+    if brier is not None:
+        was = coverage.get("reference_threshold_brier")
+        typer.echo(
+            f"    P(X+) Brier    {float(brier):.4f}"
+            + (f" (unscaled {float(was):.4f})" if was is not None else "")
+        )
+
+
 def _print_pipeline(result: dict[str, Any]) -> None:
     """Render one pipeline run."""
     if result.get("skipped"):
@@ -2130,6 +2160,7 @@ def cmd_ml_train(
                 f"{float(coverage.get('above_interval', 0.0)):.1%} above)",
                 fg=typer.colors.GREEN if abs(drift) <= 0.05 else typer.colors.YELLOW,
             )
+            _print_spread_detail(coverage)
 
         occupancy = (block.get("summary") or {}).get("distribution_rows") or {}
         if occupancy:

@@ -141,15 +141,26 @@ def shifted_median(
     distribution: ResidualDistribution,
     *,
     histories: Sequence[float | None] | None = None,
+    volatilities: Sequence[float | None] | None = None,
 ) -> list[float]:
-    """Median plus its error cell's mean residual, clipped at zero."""
+    """Median plus its error cell's mean residual, clipped at zero.
+
+    The mean residual is scaled by the player's own spread when the
+    distribution has one, exactly as his quantiles are.
+    """
     if histories is None:
         if rows is None:
             raise ValueError("need rows or histories")
         histories = [row.features.get("games_played_career_window") for row in rows]
+    if volatilities is None:
+        volatilities = (
+            [distribution.volatility_of(row.features) for row in rows]
+            if rows is not None
+            else [None] * len(medians)
+        )
     return [
-        max(0.0, float(m) + distribution.mean_residual(float(m), h))
-        for m, h in zip(medians, histories, strict=True)
+        max(0.0, float(m) + distribution.mean_residual(float(m), h, v))
+        for m, h, v in zip(medians, histories, volatilities, strict=True)
     ]
 
 
