@@ -106,7 +106,10 @@ THRESHOLDS: dict[str, tuple[float, ...]] = {
 SCALE_BOUNDS: tuple[float, float] = (0.5, 2.0)
 
 #: Powers tried for the volatility scale. 0 (unscaled) is always the incumbent.
-SCALE_POWERS: tuple[float, ...] = (0.25, 0.5, 0.75, 1.0)
+#: Fine at the low end, where real data lands: on the first v6 retrain minutes
+#: and threes both chose 0.25, and for threes that overshot (steady shooters'
+#: coverage fell from 84% to 76.5%), so the step below it matters.
+SCALE_POWERS: tuple[float, ...] = (0.1, 0.15, 0.2, 0.25, 0.35, 0.5, 0.75, 1.0)
 
 #: The later share of validation that scores the candidates. Validation is
 #: chronological, so this is "fit on the past, judge on what came next".
