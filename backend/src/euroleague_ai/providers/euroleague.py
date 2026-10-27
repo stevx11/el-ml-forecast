@@ -266,16 +266,25 @@ class EuroLeagueProvider:
     def _season_path(self, season: SeasonRef, suffix: str = "") -> str:
         return f"/competitions/{season.competition_code}/seasons/{season.season_code}{suffix}"
 
-    async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
+    async def _get(
+        self, path: str, params: dict[str, Any] | None = None, *, fresh: bool = False
+    ) -> Any:
         """Fetch and decode JSON, with caching, rate limiting and retries.
 
         Exhausted retries surface as :class:`ProviderError`, never as an internal
         marker exception. Callers get one exception type to handle, and the
         retry mechanism stays an implementation detail of this module.
+
+        ``fresh`` skips the cache both ways: for data that changes by the minute
+        before tip-off, a cached copy is the wrong answer.
         """
         cache_key = f"provider:{self.provider_key}:{path}:{sorted((params or {}).items())}"
 
-        if self._cache is not None and (cached := await self._cache.get(cache_key)) is not None:
+        if (
+            not fresh
+            and self._cache is not None
+            and (cached := await self._cache.get(cache_key)) is not None
+        ):
             return cached
 
         try:
@@ -294,7 +303,7 @@ class EuroLeagueProvider:
         except httpx.TransportError as exc:
             raise ProviderError(self.provider_key, f"transport failure on {path}: {exc}") from exc
 
-        if self._cache is not None:
+        if self._cache is not None and not fresh:
             await self._cache.set(cache_key, payload)
         return payload
 
@@ -480,6 +489,15 @@ class EuroLeagueProvider:
             },
         )
         return games
+
+    async def fetch_game_stats_payload(
+        self, season: SeasonRef, game_code: int
+    ) -> dict[str, Any] | None:
+        """The raw, uncached ``/games/{code}/stats`` response, for the lineup probe."""
+        payload = await self._get(
+            self._season_path(season, f"/games/{game_code}/stats"), fresh=True
+        )
+        return payload if isinstance(payload, dict) else None
 
     async def fetch_game_stats(self, season: SeasonRef, game_code: int) -> GameStatsDTO | None:
         payload = await self._get(self._season_path(season, f"/games/{game_code}/stats"))

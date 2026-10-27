@@ -102,6 +102,8 @@ euroleague-ai ml predict --days 7                           # project upcoming f
 euroleague-ai ml why --game-code 120 --player petrovic      # explain one projection
 euroleague-ai ml score                                      # score finished games
 euroleague-ai ml accuracy                                   # realised accuracy + calibration
+euroleague-ai ml accuracy --by-version                      # live error per model version; new vs old on the same player-games
+euroleague-ai lineups probe --hours 6 --watch               # when do starting fives appear? (measurement, stores nothing)
 ```
 
 To run `ingest → score → predict` automatically at the UTC times in `PIPELINE_RUN_AT`, start the opt-in scheduler service:

@@ -682,3 +682,142 @@ async def model_versions_in_play(session: AsyncSession) -> list[ModelVersion]:
         .order_by(ModelVersion.trained_at.desc())
     )
     return list((await session.execute(stmt)).scalars().all())
+
+
+async def accuracy_by_version(
+    session: AsyncSession,
+    *,
+    season_code: str | None = None,
+    include_absent: bool = False,
+) -> list[dict[str, Any]]:
+    """Live accuracy per model version, oldest first within each target.
+
+    The retrain rhythm (roadmap p2-03) needs one question answered before a new
+    version is trusted: is its live error no worse than the last one's? Pooled
+    accuracy cannot say, because it mixes versions. For P(plays) the error is
+    the Brier score, and absences are always included (they are what it
+    predicts).
+    """
+    stmt = (
+        select(
+            ModelVersion.version,
+            ModelVersion.target,
+            ModelVersion.feature_set_version,
+            ModelVersion.trained_at,
+            ModelVersion.is_active,
+            func.count(PredictionOutcome.id),
+            func.avg(PredictionOutcome.absolute_error),
+            func.avg(PredictionOutcome.squared_error),
+            func.avg(Prediction.predicted_value - PredictionOutcome.actual_value),
+            func.count(func.distinct(Game.id)),
+            func.min(Game.round_number),
+            func.max(Game.round_number),
+        )
+        .join(Prediction, Prediction.model_version_id == ModelVersion.id)
+        .join(PredictionOutcome, PredictionOutcome.prediction_id == Prediction.id)
+        .join(Game, Game.id == Prediction.game_id)
+        .group_by(ModelVersion.id)
+        .order_by(
+            ModelVersion.target, ModelVersion.trained_at.asc().nulls_first(), ModelVersion.version
+        )
+    )
+    if season_code:
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
+    if not include_absent:
+        stmt = stmt.where(
+            (PredictionOutcome.did_not_appear.is_(False))
+            | (Prediction.target == PredictionTarget.PLAYS)
+        )
+
+    out: list[dict[str, Any]] = []
+    for row in (await session.execute(stmt)).all():
+        (
+            version,
+            target,
+            feature_set,
+            trained_at,
+            active,
+            scored,
+            mae,
+            mse,
+            bias,
+            games,
+            first_round,
+            last_round,
+        ) = row
+        is_plays = target is PredictionTarget.PLAYS
+        out.append(
+            {
+                "target": str(target),
+                "version": version,
+                "feature_set": feature_set,
+                "trained_at": trained_at.isoformat() if trained_at else None,
+                "active": bool(active),
+                "scored": int(scored),
+                "games": int(games),
+                "rounds": [first_round, last_round],
+                "metric": "brier" if is_plays else "mae",
+                "error": round(float(mse if is_plays else mae), 4),
+                "bias": round(float(bias), 4),
+            }
+        )
+    return out
+
+
+async def head_to_head(
+    session: AsyncSession,
+    *,
+    target: PredictionTarget,
+    newer: str,
+    older: str,
+    include_absent: bool = False,
+) -> dict[str, Any]:
+    """Two versions' live error on exactly the same player-games.
+
+    Separate rounds are different difficulties: a version that only saw a
+    round of blowouts looks worse than it is. Where both versions predicted
+    the same player in the same game, the comparison is fair.
+    """
+    new_pred = aliased(Prediction)
+    old_pred = aliased(Prediction)
+    new_version = aliased(ModelVersion)
+    old_version = aliased(ModelVersion)
+    new_outcome = aliased(PredictionOutcome)
+    old_outcome = aliased(PredictionOutcome)
+    is_plays = target is PredictionTarget.PLAYS
+    error_new = new_outcome.squared_error if is_plays else new_outcome.absolute_error
+    error_old = old_outcome.squared_error if is_plays else old_outcome.absolute_error
+
+    stmt = (
+        select(func.count(), func.avg(error_new), func.avg(error_old))
+        .select_from(new_pred)
+        .join(new_version, new_version.id == new_pred.model_version_id)
+        .join(new_outcome, new_outcome.prediction_id == new_pred.id)
+        .join(
+            old_pred,
+            and_(
+                old_pred.player_id == new_pred.player_id,
+                old_pred.game_id == new_pred.game_id,
+                old_pred.target == new_pred.target,
+            ),
+        )
+        .join(old_version, old_version.id == old_pred.model_version_id)
+        .join(old_outcome, old_outcome.prediction_id == old_pred.id)
+        .where(
+            new_pred.target == target,
+            new_version.version == newer,
+            old_version.version == older,
+        )
+    )
+    if not include_absent and not is_plays:
+        stmt = stmt.where(new_outcome.did_not_appear.is_(False))
+    shared, new_error, old_error = (await session.execute(stmt)).one()
+    return {
+        "target": str(target),
+        "newer": newer,
+        "older": older,
+        "shared": int(shared or 0),
+        "metric": "brier" if is_plays else "mae",
+        "newer_error": round(float(new_error), 4) if new_error is not None else None,
+        "older_error": round(float(old_error), 4) if old_error is not None else None,
+    }

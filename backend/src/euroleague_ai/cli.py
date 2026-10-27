@@ -13,6 +13,7 @@ to Celery tasks later is a decorator, not a rewrite.
 from __future__ import annotations
 
 import asyncio
+import itertools
 from collections.abc import Callable, Coroutine
 from typing import TYPE_CHECKING, Annotated, Any
 
@@ -57,6 +58,11 @@ app.add_typer(ml_app, name="ml")
 app.add_typer(maintenance_app, name="maintenance")
 app.add_typer(pipeline_app, name="pipeline")
 app.add_typer(injuries_app, name="injuries")
+lineups_app = typer.Typer(
+    help="Starting lineups: when are they published, relative to tip-off?",
+    no_args_is_help=True,
+)
+app.add_typer(lineups_app, name="lineups")
 
 SeasonOption = Annotated[str, typer.Option("--season", "-s", help="Season code, e.g. E2025.")]
 
@@ -2659,6 +2665,66 @@ def cmd_ml_score(
         typer.echo(f"    {target:<24}{count:>8,}")
 
 
+def _print_accuracy_by_version(season_code: str | None, include_absent: bool) -> None:
+    """``ml accuracy --by-version``: is each new version's live error no worse?"""
+    from euroleague_ai.ml.outcomes import accuracy_by_version, head_to_head
+    from euroleague_ai.models.enums import PredictionTarget
+
+    async def job() -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        async with session_scope() as session:
+            rows = await accuracy_by_version(
+                session, season_code=season_code, include_absent=include_absent
+            )
+            pairs: list[dict[str, Any]] = []
+            by_target: dict[str, list[dict[str, Any]]] = {}
+            for row in rows:
+                by_target.setdefault(row["target"], []).append(row)
+            for target, versions in by_target.items():
+                for older, newer in itertools.pairwise(versions):
+                    pairs.append(
+                        await head_to_head(
+                            session,
+                            target=PredictionTarget[target],
+                            newer=newer["version"],
+                            older=older["version"],
+                            include_absent=include_absent,
+                        )
+                    )
+            return rows, pairs
+
+    rows, pairs = _run(job)
+    if not rows:
+        typer.secho("  Nothing scored yet.", fg=typer.colors.YELLOW)
+        return
+    typer.echo("")
+    typer.echo(
+        f"  {'target':<22}{'version':<10}{'features':<10}{'rounds':<9}{'games':>6}"
+        f"{'scored':>8}{'error':>9}{'bias':>9}"
+    )
+    for row in rows:
+        first, last = row["rounds"]
+        rounds = f"{first}-{last}" if first != last else f"{first}"
+        typer.secho(
+            f"  {row['target']:<22}{row['version']:<10}{row['feature_set']:<10}{rounds:<9}"
+            f"{row['games']:>6}{row['scored']:>8,}{row['error']:>9.4f}{row['bias']:>+9.3f}"
+            + ("  active" if row["active"] else ""),
+            bold=row["active"],
+        )
+    typer.echo("  error is MAE, or the Brier score for PLAYS")
+    shared = [p for p in pairs if p["shared"]]
+    if shared:
+        typer.echo("")
+        typer.echo("  Same player-games, newer vs older version:")
+        for p in shared:
+            better = p["newer_error"] <= p["older_error"]
+            typer.secho(
+                f"  {p['target']:<22}{p['newer']} {p['newer_error']:.4f} vs "
+                f"{p['older']} {p['older_error']:.4f} on {p['shared']:,} "
+                f"({'no worse' if better else 'WORSE'})",
+                fg=typer.colors.GREEN if better else typer.colors.RED,
+            )
+
+
 @ml_app.command("accuracy")
 def cmd_ml_accuracy(
     season: SeasonOption = "",
@@ -2669,6 +2735,14 @@ def cmd_ml_accuracy(
             help="Fold non-appearances into the error figures.",
         ),
     ] = False,
+    by_version: Annotated[
+        bool,
+        typer.Option(
+            "--by-version",
+            help="Live error per model version, and each version against the one "
+            "before it on the same player-games.",
+        ),
+    ] = False,
 ) -> None:
     """Realised accuracy and calibration on games that have been played.
 
@@ -2676,6 +2750,10 @@ def cmd_ml_accuracy(
     the model, which is what makes it worth more than the training report.
     """
     from euroleague_ai.ml.outcomes import accuracy_report, unscored_games
+
+    if by_version:
+        _print_accuracy_by_version(season or None, include_absent)
+        return
 
     async def job() -> dict[str, Any]:
         async with session_scope() as session:
@@ -2928,3 +3006,108 @@ def cmd_ml_roster(
                 "    none resolved - roster data for this season may be missing",
                 fg=typer.colors.YELLOW,
             )
+
+
+@lineups_app.command("probe")
+def cmd_lineups_probe(
+    season: SeasonOption = "",
+    hours: Annotated[
+        float, typer.Option("--hours", help="Games tipping off within this many hours.")
+    ] = 3.0,
+    watch: Annotated[
+        bool,
+        typer.Option(
+            "--watch",
+            help="Keep looking until 10 minutes after the last tip-off, then summarise.",
+        ),
+    ] = False,
+    every: Annotated[
+        int, typer.Option("--every", help="Seconds between looks with --watch.")
+    ] = 120,
+) -> None:
+    """Look at each upcoming game's sheet: are the starting fives on it yet?
+
+    Measures when lineups become knowable, to decide whether a later prediction
+    run with lineups is worth building (roadmap p6-03). Reads the provider fresh,
+    never from the cache, stores nothing in the database, and appends every look
+    to reports/lineups/<date>.jsonl beside the model artifacts.
+
+    Start it with --watch an hour or two before a round's first tip-off and leave
+    it running; the summary at the end is what to send back.
+    """
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.ingestion.lineups import (
+        AFTER_TIP_OFF,
+        LineupProbe,
+        append_log,
+        first_complete,
+        games_near_tip_off,
+        probe,
+    )
+    from euroleague_ai.ml.registry import DEFAULT_ARTIFACT_ROOT
+    from euroleague_ai.providers.euroleague import EuroLeagueProvider
+
+    settings = get_settings()
+    season_code = season or _season_default()
+
+    async def job() -> list[LineupProbe]:
+        clock = SystemClock()
+        async with session_scope() as session:
+            games = [
+                (g.game_code, g.tip_off_utc)
+                for g in await games_near_tip_off(
+                    session, season_code=season_code, now=clock.now(), hours=hours
+                )
+            ]
+        if not games:
+            typer.echo(f"  no {season_code} games within {hours:g} hours")
+            return []
+        provider = build_provider(settings)
+        if not isinstance(provider, EuroLeagueProvider):
+            await provider.aclose()
+            typer.secho(
+                "  the lineup probe needs the live EuroLeague provider", fg=typer.colors.RED
+            )
+            raise typer.Exit(code=1)
+        seen: list[LineupProbe] = []
+        try:
+            while True:
+                now = clock.now()
+                pending = [(code, tip) for code, tip in games if now <= tip + AFTER_TIP_OFF]
+                if not pending:
+                    break
+                records = await probe(provider, season_ref(season_code, settings), pending, now=now)
+                append_log(records, root=DEFAULT_ARTIFACT_ROOT, now=now)
+                for r in records:
+                    sheet = (
+                        f"{r.home.team or '?'} {r.home.starters}/{r.home.players}  "
+                        f"{r.away.team or '?'} {r.away.starters}/{r.away.players}"
+                        if r.found
+                        else "no sheet yet"
+                    )
+                    typer.secho(
+                        f"  {now:%H:%M}  game {r.game_code:<4} {r.minutes_to_tip_off:>+7.1f} min  "
+                        f"{sheet}",
+                        fg=typer.colors.GREEN if r.complete else None,
+                    )
+                seen.extend(records)
+                if not watch:
+                    break
+                await asyncio.sleep(every)
+        finally:
+            await provider.aclose()
+        return seen
+
+    records = _run(job)
+    if not records:
+        return
+    typer.echo("")
+    typer.echo("  starters/listed per side. Summary, minutes before tip-off:")
+    for game_code, (first_look, complete) in first_complete(records).items():
+        if complete is None:
+            verdict = "both fives never on the sheet"
+        elif complete == first_look:
+            verdict = f"already complete at the first look ({complete:+.1f})"
+        else:
+            verdict = f"both fives first seen at {complete:+.1f}"
+        typer.echo(f"    game {game_code:<4} first look {first_look:+.1f}: {verdict}")
