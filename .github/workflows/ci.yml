@@ -96,12 +96,9 @@ jobs:
   quality:
     name: lint and types
     runs-on: ubuntu-latest
-    # Not blocking yet. ruff and mypy have never been run against this codebase
-    # (backlog item 08), so they will report real findings on the first run.
-    # Making them required today would mean merging into a permanently red CI,
-    # which trains people to ignore it. Flip continue-on-error off once item 08
-    # has cleared the backlog.
-    continue-on-error: true
+    # Blocking: the backlog is cleared, so any new lint, format or type error
+    # fails the build. ruff and mypy are pinned in the [dev] extra so a new
+    # release cannot turn the build red on its own.
 
     steps:
       - uses: actions/checkout@v4
@@ -113,9 +110,11 @@ jobs:
           cache-dependency-path: pyproject.toml
 
       - name: Install
+        # [ml] as well: mypy follows the lazy numpy and LightGBM imports in the
+        # training code, and reports them as missing without the packages.
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[dev]"
+          pip install -e ".[dev,ml]"
 
       - name: Ruff
         run: ruff check backend --output-format=github

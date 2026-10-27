@@ -32,8 +32,9 @@ ingest: ## Ingest a season: make ingest SEASON=E2025
 test: ## Run the full test suite
 	$(COMPOSE) exec -T backend pytest
 
-lint: ## Ruff
+lint: ## Ruff lint and format check
 	$(COMPOSE) exec -T backend ruff check backend
+	$(COMPOSE) exec -T backend ruff format --check backend
 
 typecheck: ## mypy
 	$(COMPOSE) exec -T backend mypy
