@@ -36,7 +36,7 @@ from euroleague_ai.core.config import Settings, get_settings
 from euroleague_ai.core.errors import NotFoundError
 from euroleague_ai.core.logging import get_logger
 from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features
-from euroleague_ai.ml.distribution import ResidualDistribution, thresholds_for
+from euroleague_ai.ml.distribution import ResidualDistribution, threshold_cutoff, thresholds_for
 from euroleague_ai.ml.expectation import (
     SOURCE_BOOSTER,
     SOURCE_NONE,
@@ -204,7 +204,7 @@ class LoadedModel:
                 # Keys are strings because this lands in JSONB, where numeric
                 # keys would come back as strings anyway.
                 str(int(threshold)): self.distribution.probability_at_least(
-                    predicted, history, threshold
+                    predicted, history, threshold_cutoff(str(self.target), threshold)
                 )
                 for threshold in thresholds_for(str(self.target))
             },

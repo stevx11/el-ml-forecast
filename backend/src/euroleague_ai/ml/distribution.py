@@ -89,6 +89,33 @@ def thresholds_for(target: str) -> tuple[float, ...]:
     return THRESHOLDS.get(str(target).upper(), ())
 
 
+#: Targets measured on a continuous scale. Everything else in a box score is a
+#: whole number.
+CONTINUOUS_TARGETS: frozenset[str] = frozenset({"MINUTES"})
+
+
+def threshold_cutoff(target: str, threshold: float) -> float:
+    """Where to evaluate P(actual >= threshold) on the residual distribution.
+
+    **Continuity correction for whole-number stats.** The residual distribution
+    is continuous: projection plus a residual measured on someone else. A player
+    who made exactly one three, projected above this player, has a residual
+    that lands *below* 1 when it is applied here, so outcomes sitting exactly on
+    a bar are split across both sides of it and "at least k" is undercounted.
+    For a whole-number stat, "at least k" is "more than k - 1", so the event is
+    evaluated at k - 0.5, the midpoint.
+
+    Measured, not assumed: on the 2025 test period P(X+) implied only 0.69-0.79
+    of the threes nights that happened, 0.74-0.83 of assists, 0.76-0.83 of
+    rebounds and 0.87-0.96 of points, while continuous minutes were exactly
+    1.00. A synthetic league with the same fitting reproduces those ratios
+    without the correction and lands within 2% of reality with it.
+    """
+    if str(target).upper() in CONTINUOUS_TARGETS:
+        return float(threshold)
+    return float(threshold) - 0.5
+
+
 def history_bucket(games: float | None) -> int:
     """Bucket index for a player's prior-game count.
 
