@@ -303,7 +303,12 @@ change, `news extract --replace --days N` re-reads stored articles and drops the
 old readings. The daily BasketNews table (`injuries report`, `source = REPORT`) is the
 primary source: one row per player for all 20 clubs, statuses set by an editor,
 the Round column as scope, only changes written, and a player who drops off the
-table recorded as back. Manual entry remains for overrides:
+table recorded as back. Every fetch is logged (`ingestion_runs`,
+`injury_report.fetch`) with the clubs it listed, and a player's newest table row
+counts as confirmed at the last fetch that repeated it: a news reading outranks
+the table only if it is newer than that fetch. News extraction (rules-v3) never
+carries a status across a contrast word ("X, Y and Z are all available while W
+is ruled out"). Manual entry remains for overrides:
 `euroleague-ai injuries set|import|list|history`. Reports are scoped to one game,
 to every game before a return date, or open-ended until the player plays again.
 

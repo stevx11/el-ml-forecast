@@ -179,3 +179,32 @@ class TestKeepAvailable:
         assert resolve_status([ready], game_id=GAME, tip_off=TIP, last_played=None) is None
         kept = resolve_status([ready], game_id=GAME, tip_off=TIP, last_played=None, keep_available=True)
         assert kept is not None and kept.report.status is AvailabilityStatus.AVAILABLE
+
+
+class TestTableConfirmation:
+    """The injury table writes only changes, so its rows carry the time of the
+    last fetch that repeated them. News only wins if it is newer than that."""
+
+    def _table(self, status: AvailabilityStatus, *, days_before: float, confirmed_days_before: float | None) -> StatusReport:
+        report = replace(
+            _report(status, days_before=days_before, game=GAME), source=StatusSourceType.REPORT
+        )
+        confirmed = TIP - timedelta(days=confirmed_days_before) if confirmed_days_before is not None else None
+        return replace(report, confirmed_at=confirmed)
+
+    def test_a_reconfirmed_table_row_beats_an_older_news_reading(self) -> None:
+        table = self._table(AvailabilityStatus.AVAILABLE, days_before=2, confirmed_days_before=0.1)
+        news = replace(_news(1), game_id=GAME)
+        assert resolve_status([table, news], game_id=GAME, tip_off=TIP, last_played=None) is None
+
+    def test_without_the_confirmation_the_newer_news_wins(self) -> None:
+        table = self._table(AvailabilityStatus.AVAILABLE, days_before=2, confirmed_days_before=None)
+        news = replace(_news(1), game_id=GAME)
+        resolved = resolve_status([table, news], game_id=GAME, tip_off=TIP, last_played=None)
+        assert resolved is not None and resolved.report.source is StatusSourceType.NEWS
+
+    def test_news_newer_than_the_last_fetch_still_wins(self) -> None:
+        table = self._table(AvailabilityStatus.AVAILABLE, days_before=2, confirmed_days_before=1.5)
+        news = replace(_news(1), game_id=GAME)
+        resolved = resolve_status([table, news], game_id=GAME, tip_off=TIP, last_played=None)
+        assert resolved is not None and resolved.rules_out

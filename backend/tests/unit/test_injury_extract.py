@@ -275,3 +275,66 @@ class TestBackground:
             real,
         )
         assert "DORSEY, TYLER" not in result or not result["DORSEY, TYLER"][1]
+
+
+# Round 7 report sentences (Eurohoops, 22 October 2026). The first one ruled
+# Nunn out for a game he played 20 minutes in: "Kendrick Nunn" alone before the
+# comma borrowed "ruled out" from across "while".
+R7_NAMES = [
+    "NUNN, KENDRICK", "SLOUKAS, KOSTAS", "BONGA, ISAAC", "ROGKAVOPOULOS, NIKOS",
+    "MANTZOUKAS, LEFTERIS", "WALKER, LONNIE", "JEFFRIES, DAQUAN", "STEVENS, LAMAR",
+    "JEKIRI, TONYE", "MARINKOVIC, VANJA", "WILLIS, DEREK", "MILJENOVIC, STEFAN",
+]
+
+
+@pytest.fixture(scope="module")
+def r7() -> RosterIndex:
+    return RosterIndex([RosterPlayer(uuid.uuid4(), n, uuid.uuid4(), "XXX", None) for n in R7_NAMES])
+
+
+class TestContrastWords:
+    def test_a_list_takes_the_status_of_its_own_part(self, r7: RosterIndex) -> None:
+        result = _scoped(
+            "Kendrick Nunn, Kostas Sloukas and Isaac Bonga are all available while Nikos "
+            "Rogkavopoulos and Lefteris Mantzoukas are ruled out for Panathinaikos’s game "
+            "against Baskonia on Thursday, the club has confirmed.",
+            r7,
+        )
+        for name in ("NUNN, KENDRICK", "SLOUKAS, KOSTAS", "BONGA, ISAAC"):
+            assert result[name][:2] == (OK, False), name
+        for name in ("ROGKAVOPOULOS, NIKOS", "MANTZOUKAS, LEFTERIS"):
+            assert result[name][:3] == (OUT, True, "game"), name
+
+    def test_a_subjectless_part_continues_the_previous_subject(self, r7: RosterIndex) -> None:
+        result = _scoped(
+            "Isaac Bonga, who was ruled out for Round 5, also missed Round 6 but is back "
+            "available for Round 7.",
+            r7,
+        )
+        assert result["BONGA, ISAAC"][0] is OK
+
+    @pytest.mark.parametrize(
+        ("sentence", "name"),
+        [
+            ("Lamar Stevens available once again while Tonye Jekiri, Vanja Marinkovic and Derek "
+             "Willis are ruled out for Partizan’s game against Crvena Zvezda on Thursday.",
+             "STEVENS, LAMAR"),
+            ("Lonnie Walker is listed as available ahead of his possible debut while DaQuan "
+             "Jeffries remains sidelined for Besiktas’s game at Efes on Thursday.",
+             "WALKER, LONNIE"),
+        ],
+    )
+    def test_more_ways_of_saying_available(self, sentence: str, name: str, r7: RosterIndex) -> None:
+        result = _scoped(sentence, r7)
+        assert result[name][0] is OK
+        # And the out on the other side of "while" stays with its own players.
+        outs = {n for n, r in result.items() if r[0] is OUT}
+        assert name not in outs and outs
+
+    def test_a_past_absence_with_an_aside_does_not_rule_out(self, r7: RosterIndex) -> None:
+        result = _scoped(
+            "Stefan Miljenovic, who didn’t play in Round 4, was sidelined for Rounds 5 and 6 "
+            "with an ankle injury.",
+            r7,
+        )
+        assert "MILJENOVIC, STEFAN" not in result or not result["MILJENOVIC, STEFAN"][1]

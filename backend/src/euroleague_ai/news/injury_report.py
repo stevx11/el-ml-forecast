@@ -41,10 +41,12 @@ from euroleague_ai.core.clock import ensure_utc
 from euroleague_ai.core.logging import get_logger
 from euroleague_ai.ingestion.injuries import RosterPlayer, current_rosters, normalise
 from euroleague_ai.models.availability import PlayerStatusEvent
-from euroleague_ai.models.enums import AvailabilityStatus, StatusSourceType
+from euroleague_ai.models.enums import AvailabilityStatus, IngestionStatus, StatusSourceType
 from euroleague_ai.models.game import Game
+from euroleague_ai.models.ingestion import IngestionRun
 from euroleague_ai.models.news import NewsArticle
 from euroleague_ai.news.store import ensure_source
+from euroleague_ai.repositories.availability import TABLE_FETCH_JOB
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
@@ -471,6 +473,23 @@ async def import_injury_report(
         )
         result.cleared += 1
 
+    # Every successful read is a confirmation of every row it repeated, so it is
+    # recorded even when nothing changed. Status resolution reads these to date
+    # the table's word by the last fetch rather than the last change.
+    session.add(
+        IngestionRun(
+            id=uuid.uuid4(),
+            job_name=TABLE_FETCH_JOB,
+            provider_key="basketnews",
+            status=IngestionStatus.SUCCEEDED,
+            started_at=now,
+            finished_at=now,
+            rows_read=result.rows,
+            rows_written=result.written + result.cleared,
+            details={**result.as_dict(), "team_ids": sorted(str(t) for t in listed_teams)},
+        )
+    )
+    await session.flush()
     logger.info("injury report imported", extra=result.as_dict())
     return result
 

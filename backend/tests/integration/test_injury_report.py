@@ -132,6 +132,47 @@ class TestImport:
         assert garcia[-1].game_id == (await _game(session, 5)).id
 
 
+class TestConfirmation:
+    async def test_every_fetch_is_recorded_even_when_nothing_changed(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef
+    ) -> None:
+        from euroleague_ai.repositories.availability import table_fetches
+
+        await _world(session, fixture_provider, season)
+        await _import(session, BLOCKS)
+        await _import(session, BLOCKS, at=TUESDAY)
+        fetches = await table_fetches(session, as_of=TUESDAY)
+        assert [f.fetched_at for f in fetches] == [TUESDAY, MONDAY_BEFORE_GAME5]
+        partizan = str(await _id(session, EntityType.TEAM, "PAR"))
+        assert all(partizan in f.team_ids for f in fetches)
+
+    async def test_a_misread_news_out_loses_to_the_table_fetched_after_it(
+        self, session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef,
+        settings: Settings,
+    ) -> None:
+        """The Nunn case: the table says ready on Monday, a misread article says
+        out on Tuesday morning, Tuesday afternoon's fetch still says ready."""
+        await _world(session, fixture_provider, season)
+        await _import(session, BLOCKS)
+        martinez = await _id(session, EntityType.PLAYER, "012002")
+        session.add(
+            PlayerStatusEvent(
+                player_id=martinez, team_id=await _id(session, EntityType.TEAM, "MAD"),
+                game_id=(await _game(session, 5)).id, status=AvailabilityStatus.OUT,
+                source_type=StatusSourceType.NEWS, confidence=0.85, reason="ruled out",
+                event_timestamp=TUESDAY - timedelta(hours=4), observed_at=TUESDAY - timedelta(hours=4),
+            )
+        )
+        unchanged = await _import(session, BLOCKS, at=TUESDAY)
+        assert unchanged.written == 0  # type: ignore[attr-defined]
+
+        await predict_game(session, await _game(session, 5), await _models(session),
+                           clock=INGEST, settings=settings)
+        plays = await _plays(session, 5)
+        assert plays["012002"][0] == pytest.approx(0.9)  # not ruled out
+        assert plays["011002"][0] == 0.0  # the table's own outs still apply
+
+
 class TestPredictions:
     async def test_table_outs_set_plays_to_zero_and_ready_clears_news(
         self,

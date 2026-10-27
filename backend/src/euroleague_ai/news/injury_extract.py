@@ -15,9 +15,14 @@ sit behind the same function signature and write the same rows.
    article, which is how journalists write. A surname that was never introduced
    in full is ignored: "James" or "Hall" on their own are too likely to be
    someone else.
-2. Split each sentence into clauses at commas, ";", "but" and "while", so
-   "Fournier is out, Dorsey remains uncertain, and Montero could miss Friday"
-   gives three separate readings.
+2. Split each sentence into parts at contrast words (";", "but", "while",
+   "whereas", a dash), and each part into clauses at commas, so "Fournier is
+   out, Dorsey remains uncertain, and Montero could miss Friday" gives three
+   separate readings. A clause that is only names takes the status of its own
+   part ("Nunn, Sloukas and Bonga are all available"), never one from across a
+   contrast word ("... while Rogkavopoulos is ruled out"). A part that names
+   nobody and starts with a verb ("... but is back available") continues the
+   previous part's subject.
 3. Match status phrases in each clause: out, suspended, doubtful, questionable,
    available.
 4. Skip negated phrases ("has not been ruled out", "no longer sidelined") and
@@ -46,7 +51,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from euroleague_ai.ingestion.injuries import RosterPlayer
 
 #: Bump when the rules change, so re-extraction can tell old readings from new.
-EXTRACTOR_VERSION = "rules-v2"
+EXTRACTOR_VERSION = "rules-v3"
 
 #: A news-derived "out" changes a prediction only at or above this confidence.
 #: Owned by the prediction side, imported here so the two can never disagree.
@@ -69,6 +74,7 @@ _PHRASES: tuple[tuple[str, AvailabilityStatus, float], ...] = (
     (r"(?:did|does|will) not travel", AvailabilityStatus.OUT, 0.85),
     (r"(?:is|are|remains?|will be) unavailable", AvailabilityStatus.OUT, 0.85),
     (r"(?:is|are) injured", AvailabilityStatus.OUT, 0.7),
+    (r"(?:is|are) (?:now )?listed as out\b", AvailabilityStatus.OUT, 0.85),
     (r"(?:is|are|was|has been) suspended", AvailabilityStatus.SUSPENDED, 0.9),
     # Doubtful
     (r"(?:is|remains?) doubtful", AvailabilityStatus.DOUBTFUL, 0.75),
@@ -81,12 +87,19 @@ _PHRASES: tuple[tuple[str, AvailabilityStatus, float], ...] = (
     (r"(?:upgraded|downgraded) to questionable", AvailabilityStatus.QUESTIONABLE, 0.85),
     (r"questionable", AvailabilityStatus.QUESTIONABLE, 0.75),
     (r"day to day", AvailabilityStatus.QUESTIONABLE, 0.7),
+    (r"(?:is|are) (?:now )?listed as (?:questionable|doubtful|a game time decision)",
+     AvailabilityStatus.QUESTIONABLE, 0.75),
     (r"(?:could|may|might) miss", AvailabilityStatus.QUESTIONABLE, 0.65),
     (r"(?:status|future|availability) (?:remains? |is )?(?:uncertain|unclear)", AvailabilityStatus.QUESTIONABLE, 0.6),
     (r"(?:is|remains?) uncertain", AvailabilityStatus.QUESTIONABLE, 0.6),
     (r"question mark", AvailabilityStatus.QUESTIONABLE, 0.6),
     # Available
-    (r"(?:is|are) (?:back|available|fit)\b", AvailabilityStatus.AVAILABLE, 0.8),
+    (r"(?:is|are) (?:all |both |also |now )?(?:back|available|fit)\b",
+     AvailabilityStatus.AVAILABLE, 0.8),
+    (r"(?:is|are) back (?:available|in action|in the squad)", AvailabilityStatus.AVAILABLE, 0.85),
+    (r"available (?:once )?again", AvailabilityStatus.AVAILABLE, 0.8),
+    (r"(?:is|are) (?:now )?listed as (?:available|probable)", AvailabilityStatus.AVAILABLE, 0.8),
+    (r"(?:will|should) be (?:back|available)", AvailabilityStatus.AVAILABLE, 0.75),
     (r"(?:will|set to|expected to) return", AvailabilityStatus.AVAILABLE, 0.7),
     (r"returns? (?:to|from|for)\b", AvailabilityStatus.AVAILABLE, 0.75),
     (r"cleared to play", AvailabilityStatus.AVAILABLE, 0.85),
@@ -133,7 +146,16 @@ _UNIT_DAYS = {"day": 1, "week": 7, "month": 30}
 #: Applied to the raw sentence, before punctuation is normalised away. Commas
 #: separate players in a list of absences ("X is out, Y is uncertain"); a name
 #: left without a phrase of its own borrows the sentence's only phrase.
-_CLAUSE_SPLIT = re.compile(r"[;,:()]|\bbut\b|\bwhile\b|\bwhereas\b|\s[-–—]\s")
+#: Parts of a sentence that say different things about different players. A
+#: status never crosses one of these.
+_SEGMENT_SPLIT = re.compile(r";|\bbut\b|\bwhile\b|\bwhereas\b|\s[-–—]\s")
+#: Clauses within a part: a list of names, an aside, a parenthesis.
+_LIST_SPLIT = re.compile(r"[,:()]")
+#: A part that starts like this has no subject of its own: "... but is back
+#: available for Round 7" is still about the player named before "but".
+_CONTINUATION = re.compile(
+    r"^(?:is|are|was|were|will|would|has|have|had|remains?|should|could|may|might)\b"
+)
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-ZÀ-ſ\"'“])|\n+")
 
 _SURNAME_PENALTY = 0.1
@@ -262,17 +284,61 @@ def _only_names(clause: str, entries: list[tuple[_NameForms, bool]]) -> bool:
 
 
 def _next_phrase(
-    phrases: list[tuple[AvailabilityStatus, float, str] | None], index: int
+    phrases: list[tuple[AvailabilityStatus, float, str] | None],
+    index: int,
+    segments: list[int],
 ) -> int | None:
-    """Index of the phrase a list of names belongs to: the next one along, else
-    the last one before."""
-    for offset, candidate in enumerate(phrases[index + 1 :], start=index + 1):
-        if candidate is not None:
+    """Index of the phrase a list of names belongs to: the next one along in
+    the same part of the sentence, else the last one before it in that part."""
+    part = segments[index]
+    for offset in range(index + 1, len(phrases)):
+        if segments[offset] != part:
+            break
+        if phrases[offset] is not None:
             return offset
     for offset in range(index - 1, -1, -1):
+        if segments[offset] != part:
+            break
         if phrases[offset] is not None:
             return offset
     return None
+
+
+def _split_clauses(sentence: str) -> tuple[list[str], list[int]]:
+    """Normalised clauses, and the part of the sentence each belongs to."""
+    clauses: list[str] = []
+    segments: list[int] = []
+    for part, segment in enumerate(_SEGMENT_SPLIT.split(sentence)):
+        for piece in _LIST_SPLIT.split(segment):
+            text = normalise(piece)
+            if text:
+                clauses.append(text)
+                segments.append(part)
+    return clauses, segments
+
+
+def _carry_subjects(
+    clauses: list[str],
+    segments: list[int],
+    clause_players: list[list[tuple[_NameForms, bool]]],
+    phrases: list[tuple[AvailabilityStatus, float, str] | None],
+) -> None:
+    """Give a subjectless part ("... but is back available") the subject of
+    the part before it: the names in that part's first clause."""
+    for index, clause in enumerate(clauses):
+        starts_part = index == 0 or segments[index - 1] != segments[index]
+        if (
+            not starts_part
+            or index == 0
+            or clause_players[index]
+            or phrases[index] is None
+            or not _CONTINUATION.match(clause)
+        ):
+            continue
+        previous = segments[index - 1]
+        first = segments.index(previous)
+        if clause_players[first]:
+            clause_players[index] = list(clause_players[first])
 
 
 def extract_statuses(text: str, index: RosterIndex) -> list[Extracted]:
@@ -290,7 +356,7 @@ def extract_statuses(text: str, index: RosterIndex) -> list[Extracted]:
         full_here = {f.player.player_id for f in index.forms if any(p.search(norm) for p in f.full)}
         introduced |= full_here
 
-        clauses = [n for n in (normalise(c) for c in _CLAUSE_SPLIT.split(sentence)) if n]
+        clauses, segments = _split_clauses(sentence)
         clause_players: list[list[tuple[_NameForms, bool]]] = []
         for clause in clauses:
             found: list[tuple[_NameForms, bool]] = []
@@ -303,6 +369,7 @@ def extract_statuses(text: str, index: RosterIndex) -> list[Extracted]:
             clause_players.append(found)
 
         phrases = [_best_phrase(c) for c in clauses]
+        _carry_subjects(clauses, segments, clause_players, phrases)
         named = [entry for entries in clause_players for entry in entries]
         if not named or not any(phrases):
             continue
@@ -327,7 +394,7 @@ def extract_statuses(text: str, index: RosterIndex) -> list[Extracted]:
                     # not hand Montero's status to Fournier.
                     if not _only_names(clauses[clause_index], entries):
                         continue
-                    borrowed = _next_phrase(phrases, clause_index)
+                    borrowed = _next_phrase(phrases, clause_index, segments)
                     if borrowed is None:
                         continue
                     source, phrase, shared = borrowed, phrases[borrowed], True

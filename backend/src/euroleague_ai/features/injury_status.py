@@ -137,9 +137,11 @@ def resolve_status(
 
     if not applicable:
         return None
+    # Newest first, where an injury-table row counts as new as the last fetch
+    # that repeated it (see StatusReport.confirmed_at).
     newest = max(
         applicable,
-        key=lambda item: (item.report.event_timestamp, item.report.observed_at),
+        key=lambda item: (item.report.effective_at, item.report.observed_at),
     )
     # A report that the player is fine clears whatever came before it, and is
     # not itself worth showing.
