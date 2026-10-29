@@ -759,6 +759,78 @@ def cmd_injuries_report(
             typer.echo(f"    {name}")
 
 
+@injuries_app.command("calibrate")
+def cmd_injuries_calibrate(
+    season: Annotated[
+        str, typer.Option("--season", "-s", help="Only this season's rounds (default: all).")
+    ] = "",
+    dry_run: Annotated[
+        bool, typer.Option("--dry-run", help="Show the fit without saving it.")
+    ] = False,
+) -> None:
+    """Measure how much each injury label should move P(plays), from scored rounds.
+
+    Run after each round is scored (`ml score`). Fits one log-odds shift per
+    label (probable, questionable, doubtful, ready, unapplied news "out") on
+    every scored player who had it, and checks it round by round on rounds it
+    was not fitted on. Predictions use it only if that check passes.
+    """
+    from euroleague_ai.core.clock import SystemClock
+    from euroleague_ai.ml.status_calibration import (
+        calibrate,
+        calibration_path,
+        labelled_players,
+        save_calibration,
+    )
+
+    async def job() -> Any:
+        async with session_scope() as session:
+            players = await labelled_players(session, season_code=season or None)
+        return calibrate(players, now=SystemClock().now())
+
+    fit = _run(job)
+    if not fit.labels:
+        typer.secho("  No scored players with an injury label yet.", fg=typer.colors.YELLOW)
+        return
+    typer.echo("")
+    typer.secho(f"Injury labels vs P(plays) - rounds {', '.join(fit.rounds)}", bold=True)
+    typer.echo(
+        f"  {'label':<26}{'players':>8}{'played':>9}{'model P':>9}{'offset':>8}{'adjusted P':>12}"
+    )
+    for group, row in fit.labels.items():
+        offset = fit.offsets.get(group)
+        typer.echo(
+            f"  {group:<26}{int(row['players']):>8}{row['played'] / row['players']:>9.0%}"
+            f"{row['mean_model_p']:>9.2f}"
+            + (
+                f"{offset:>+8.2f}{row['mean_adjusted_p']:>12.2f}"
+                if offset is not None
+                else f"{'-':>8}{'too few':>12}"
+            )
+        )
+    held = fit.held_out
+    if held:
+        typer.echo(
+            f"\n  each round scored by the other rounds' fit ({int(held['players'])} players): "
+            f"log loss {held['model']:.4f} model alone -> {held['adjusted']:.4f} adjusted"
+        )
+    else:
+        typer.echo("\n  need at least two scored rounds to check it")
+    typer.secho(
+        "  ON - predictions will use it"
+        if fit.enabled
+        else "  OFF - predictions keep the model's P(plays)",
+        fg=typer.colors.GREEN if fit.enabled else typer.colors.YELLOW,
+        bold=True,
+    )
+    if dry_run:
+        typer.echo("  dry run - not saved")
+        return
+    save_calibration(fit)
+    typer.echo(f"  saved: {calibration_path()}")
+    typer.echo("  next:  euroleague-ai ml predict --days 7")
+
+
 @injuries_app.command("check")
 def cmd_injuries_check(
     round_number: Annotated[
@@ -987,11 +1059,19 @@ def _print_spread_detail(coverage: dict[str, Any]) -> None:
     """Per-player spread: what was chosen, coverage per volatility third, Brier."""
     scaling = coverage.get("spread_scaling") or {}
     feature = scaling.get("volatility_feature")
+    widening = float(scaling.get("season_widening") or 0.0)
+    parts = []
+    if feature:
+        parts.append(f"scaled by {feature} ^ {scaling.get('scale_power')}")
+    if widening > 0:
+        parts.append(f"{widening:.0%} wider at round 1, fading as the season fills the window")
     typer.echo(
-        f"    spread         scaled by {feature} ^ {scaling.get('scale_power')}"
-        if feature
-        else "    spread         unscaled (no volatility scale beat it on validation)"
+        "    spread         "
+        + ("; ".join(parts) if parts else "unscaled (no scale or widening beat it on validation)")
     )
+    served = coverage.get("served_fit_rows")
+    if served:
+        typer.echo(f"    served spread  refitted on validation + test ({int(served):,} errors)")
     groups = coverage.get("by_volatility") or {}
     reference = coverage.get("reference_by_volatility") or {}
     if groups:
@@ -2449,6 +2529,8 @@ def cmd_ml_predict(
         typer.echo(f"    {'squad minutes':<24} {result['minutes_reconciliation']}")
     if "stats_reconciliation" in result:
         typer.echo(f"    {'squad stats':<24} {result['stats_reconciliation']}")
+    if "status_calibration" in result:
+        typer.echo(f"    {'injury labels':<24} {result['status_calibration']}")
     if result["games"] == 0:
         typer.secho(
             "  No scheduled games in the window. Ingest a season with upcoming\n"
@@ -2735,6 +2817,13 @@ def cmd_ml_accuracy(
             help="Fold non-appearances into the error figures.",
         ),
     ] = False,
+    active: Annotated[
+        bool,
+        typer.Option(
+            "--active",
+            help="Only predictions from the models active now, not every version since round 1.",
+        ),
+    ] = False,
     by_version: Annotated[
         bool,
         typer.Option(
@@ -2761,6 +2850,7 @@ def cmd_ml_accuracy(
                 session,
                 season_code=season or None,
                 include_absent=include_absent,
+                active_only=active,
             )
             report["unscored_games"] = await unscored_games(session, season_code=season or None)
             return report
@@ -2775,7 +2865,11 @@ def cmd_ml_accuracy(
         return
 
     typer.echo("")
-    typer.secho(f"  Realised accuracy - season {report['season']}", bold=True)
+    typer.secho(
+        f"  Realised accuracy - season {report['season']}"
+        + (" - active models only" if report.get("active_only") else ""),
+        bold=True,
+    )
     typer.echo(f"  {'target':<24}{'n':>7}{'MAE':>9}{'bias':>9}{'80% int':>10}")
     for target, block in targets.items():
         interval = block.get("interval") or {}
@@ -2797,12 +2891,43 @@ def cmd_ml_accuracy(
             continue
         typer.echo("")
         typer.secho(f"  {title}", bold=True)
-        typer.echo(f"  {'stated':<12}{'n':>8}{'realised':>11}{'drift':>9}")
+        typer.echo(f"  {'stated':<12}{'n':>8}{'mean stated':>13}{'realised':>11}{'drift':>9}")
         for band in bands:
             realised = band["realised"]
             drift = realised - band["expected"]
             typer.secho(
-                f"  {band['band']:<12}{band['predictions']:>8,}{realised:>11.1%}{drift:>+9.1%}",
+                f"  {band['band']:<12}{band['predictions']:>8,}{band['expected']:>13.1%}"
+                f"{realised:>11.1%}{drift:>+9.1%}",
+                fg=typer.colors.YELLOW if abs(drift) > 0.1 else None,
+            )
+
+    by_target = report.get("thresholds_by_target") or {}
+    if by_target:
+        typer.echo("")
+        typer.secho("  P(X+) if he plays, by stat: bands 10+ points off (n >= 30)", bold=True)
+        for target, bands in by_target.items():
+            off = [
+                f"{b['band']} {b['realised'] - b['expected']:+.1%} (n={b['predictions']})"
+                for b in bands
+                if b["predictions"] >= 30 and abs(b["realised"] - b["expected"]) > 0.1
+            ]
+            typer.echo(f"  {target:<24}{', '.join(off) if off else 'all within 10 points'}")
+
+    availability = report.get("availability") or {}
+    reliability = availability.get("reliability") or []
+    if reliability:
+        typer.echo("")
+        typer.secho(
+            f"  P(plays) - {availability.get('scored', 0):,} players, "
+            f"Brier {availability.get('brier', float('nan')):.4f}",
+            bold=True,
+        )
+        typer.echo(f"  {'band':<12}{'n':>8}{'mean P':>9}{'played':>9}{'drift':>9}")
+        for row in reliability:
+            drift = row["realised"] - row["mean_predicted"]
+            typer.secho(
+                f"  {row['band']:<12}{row['rows']:>8,}{row['mean_predicted']:>9.1%}"
+                f"{row['realised']:>9.1%}{drift:>+9.1%}",
                 fg=typer.colors.YELLOW if abs(drift) > 0.1 else None,
             )
 

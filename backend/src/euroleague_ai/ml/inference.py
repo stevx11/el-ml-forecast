@@ -35,7 +35,7 @@ from euroleague_ai.core.clock import Clock, SystemClock
 from euroleague_ai.core.config import Settings, get_settings
 from euroleague_ai.core.errors import NotFoundError
 from euroleague_ai.core.logging import get_logger
-from euroleague_ai.features.injury_status import ResolvedStatus, resolve_status
+from euroleague_ai.features.injury_status import ResolvedStatus, resolve_status, status_group
 from euroleague_ai.features.registry import FEATURE_SET_VERSION, build_player_features, can_serve
 from euroleague_ai.features.snapshot import default_prediction_timestamp
 from euroleague_ai.ml.distribution import ResidualDistribution, threshold_cutoff, thresholds_for
@@ -54,6 +54,7 @@ from euroleague_ai.ml.squad_stats import (
     StatsReconciliation,
     load_stats_reconciliation,
 )
+from euroleague_ai.ml.status_calibration import StatusCalibration, load_status_calibration
 from euroleague_ai.models.enums import GameStatus, PredictionTarget, StatusSourceType
 from euroleague_ai.models.features import PlayerFeatureSnapshot
 from euroleague_ai.models.game import Game
@@ -123,7 +124,7 @@ class LoadedModel:
                     None,
                     self.distribution,
                     histories=[f.get("games_played_career_window") for f in feature_dicts],
-                    volatilities=[self.distribution.volatility_of(f) for f in feature_dicts],
+                    volatilities=[self.distribution.scale_input(f) for f in feature_dicts],
                 )
             )
         return missing
@@ -194,7 +195,7 @@ class LoadedModel:
             return {}
 
         history = features.get("games_played_career_window")
-        volatility = self.distribution.volatility_of(features)
+        volatility = self.distribution.scale_input(features)
         return {
             "quantiles": self.distribution.quantiles(predicted, history, volatility),
             "threshold_probabilities": {
@@ -333,6 +334,7 @@ async def predict_game(
     settings: Settings | None = None,
     reconciliation: MinutesReconciliation | None = None,
     stats_reconciliation: StatsReconciliation | None = None,
+    status_calibration: StatusCalibration | None = None,
 ) -> int:
     """Build snapshots and predictions for one upcoming game.
 
@@ -345,6 +347,10 @@ async def predict_game(
             and threes, from the same command. Pulls each side's expected stat
             totals toward a team-level anchor. See
             :mod:`euroleague_ai.ml.squad_stats`.
+        status_calibration: Per-label P(plays) offsets from
+            ``injuries calibrate``, applied to players with a probable,
+            questionable, doubtful or ready label. See
+            :mod:`euroleague_ai.ml.status_calibration`.
 
     Returns the number of prediction rows written.
     """
@@ -433,7 +439,7 @@ async def predict_game(
     # teammates who will actually be on the floor.
     statuses = await _resolve_statuses(session, game, rows, cutoff=cutoff)
     if statuses:
-        _apply_statuses(computed, statuses)
+        _apply_statuses(computed, statuses, status_calibration)
 
     if (
         reconciliation is not None
@@ -578,6 +584,8 @@ async def _resolve_statuses(
             game_id=game.id,
             tip_off=game.tip_off_utc,
             last_played=played.get(player_id),
+            # "Ready" moves P(plays) too, once calibrated, so it is kept.
+            keep_available=True,
         )
         if resolved is not None:
             out[index] = resolved
@@ -587,17 +595,38 @@ async def _resolve_statuses(
 def _apply_statuses(
     computed: dict[PredictionTarget, tuple[list[float], list[float | None], list[Any]]],
     statuses: dict[int, ResolvedStatus],
+    calibration: StatusCalibration | None = None,
 ) -> None:
-    """Zero P(plays) for players ruled out; attach the report to every line.
+    """Zero P(plays) for players ruled out, adjust it for other labels, attach the report.
 
     Stat lines stay "if he plays", like every other projection, so a player
     reinstated late still has a sensible line. The squad totals and minutes
-    reconciliation discount him through P(plays) = 0.
+    reconciliation discount him through P(plays). The model's own P(plays) is
+    kept in the explanation, so the next calibration starts from it.
     """
     for target, (values, _expected, explanations) in computed.items():
         for index, resolved in statuses.items():
             explanation = dict(explanations[index] or {})
-            explanation["availability"] = resolved.as_dict()
+            availability = resolved.as_dict()
+            explanation["availability"] = availability
+            if target is PredictionTarget.PLAYS and not resolved.rules_out:
+                model_p = float(values[index])
+                availability["model_p_plays"] = round(model_p, 4)
+                group = status_group(resolved.status, applied=False)
+                if calibration is not None:
+                    new_p = calibration.adjust(model_p, group)
+                    if abs(new_p - model_p) >= 0.005:
+                        values[index] = round(new_p, 4)
+                        explanation["drivers"] = [
+                            {
+                                "theme": "availability",
+                                "direction": "+" if new_p > model_p else "-",
+                                "label": f"Listed {group}: {model_p:.0%} -> {new_p:.0%}, "
+                                "as such players have played so far",
+                                "impact": round(new_p - model_p, 4),
+                            },
+                            *(explanation.get("drivers") or []),
+                        ]
             if target is PredictionTarget.PLAYS and resolved.rules_out:
                 values[index] = 0.0
                 reason = resolved.report.reason
@@ -729,6 +758,7 @@ async def predict_upcoming(
             "`euroleague-ai ml reconcile`"
         )
         reconciliation = None
+    status_fit = load_status_calibration()
     stats_fit = load_stats_reconciliation()
     if stats_fit is not None and not stats_fit.applies_to(models):
         logger.warning(
@@ -747,6 +777,7 @@ async def predict_upcoming(
             settings=settings,
             reconciliation=reconciliation,
             stats_reconciliation=stats_fit,
+            status_calibration=status_fit,
         )
         await session.commit()
         logger.info(
@@ -764,6 +795,11 @@ async def predict_upcoming(
         "minutes_reconciliation": (
             f"alpha {reconciliation.alpha}, squads to {reconciliation.target_minutes:.1f} min"
             if reconciliation is not None
+            else "off"
+        ),
+        "status_calibration": (
+            ", ".join(f"{group} {offset:+.2f}" for group, offset in status_fit.offsets.items())
+            if status_fit is not None
             else "off"
         ),
         "stats_reconciliation": (

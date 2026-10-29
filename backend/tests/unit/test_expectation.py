@@ -216,6 +216,11 @@ class TestTrainingEndToEnd:
         assert expected[0] is not None
         assert expected[0] > medians[0]  # a skewed stat averages above its median
 
+    def test_served_spread_is_refitted_on_validation_and_test(self, result: Any) -> None:
+        served = result.coverage["served_fit_rows"]
+        assert served == result.validation_rows + result.test_rows
+        assert result.distribution.sample_size == served
+
     def test_tuner_can_skip_the_head(self) -> None:
         quick = train_target(
             _skewed_world(games=300, seed=1), PredictionTarget.POINTS, fit_expected=False

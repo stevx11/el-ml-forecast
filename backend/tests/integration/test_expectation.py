@@ -25,6 +25,7 @@ from euroleague_ai.ml.distribution import ResidualDistribution
 from euroleague_ai.ml.expectation import SOURCE_SHIFTED_MEDIAN
 from euroleague_ai.ml.inference import LoadedModel, predict_game
 from euroleague_ai.ml.outcomes import accuracy_report, score_predictions, team_totals_report
+from euroleague_ai.ml.status_calibration import StatusCalibration
 from euroleague_ai.models.enums import PredictionTarget
 from euroleague_ai.models.prediction import ModelVersion, Prediction
 from euroleague_ai.providers.base import SeasonRef
@@ -73,7 +74,11 @@ async def _model_version(session: AsyncSession, target: PredictionTarget) -> Mod
     return version
 
 
-async def _predict_game6(session: AsyncSession, settings: Settings) -> uuid.UUID:
+async def _predict_game6(
+    session: AsyncSession,
+    settings: Settings,
+    status_calibration: StatusCalibration | None = None,
+) -> uuid.UUID:
     """POINTS: median 10, skewed residuals (+2 on average). PLAYS: 0.9 for all."""
     await backfill_snapshots(session, clock=CLOCK, settings=settings)
     rows, _ = await load_availability_rows(session, settings=settings)
@@ -104,6 +109,7 @@ async def _predict_game6(session: AsyncSession, settings: Settings) -> uuid.UUID
         {PredictionTarget.POINTS: points, PredictionTarget.PLAYS: plays},
         clock=CLOCK,
         settings=settings,
+        status_calibration=status_calibration,
     )
     return game.id
 

@@ -29,7 +29,7 @@ from typing import TYPE_CHECKING, Any
 
 from sqlalchemy import select
 
-from euroleague_ai.features.injury_status import resolve_status
+from euroleague_ai.features.injury_status import resolve_status, status_group
 from euroleague_ai.models.competition import Season, Team
 from euroleague_ai.models.enums import AvailabilityStatus, GameStatus, PredictionTarget
 from euroleague_ai.models.features import PlayerFeatureSnapshot
@@ -69,6 +69,9 @@ class CheckedPlayer:
     #: In the box score at all (dressed), whether or not he played.
     dressed: bool
     reason: str | None
+    #: The model's own P(plays), before any label adjustment.
+    model_plays: float = 0.0
+    game_id: uuid.UUID | None = None
 
     @property
     def played(self) -> bool:
@@ -111,17 +114,6 @@ class RoundCheck:
     @property
     def mismatches(self) -> list[CheckedPlayer]:
         return [p for p in self.players if p.mismatch]
-
-
-def _group(status: AvailabilityStatus, *, applied: bool) -> str:
-    if status in (AvailabilityStatus.OUT, AvailabilityStatus.SUSPENDED):
-        return "ruled out" if applied else "out (news, not applied)"
-    return {
-        AvailabilityStatus.DOUBTFUL: "doubtful",
-        AvailabilityStatus.QUESTIONABLE: "questionable",
-        AvailabilityStatus.PROBABLE: "probable",
-        AvailabilityStatus.AVAILABLE: "ready",
-    }.get(status, "questionable")
 
 
 async def finished_games(
@@ -215,9 +207,12 @@ async def check_games(session: AsyncSession, games: list[Game]) -> RoundCheck:
 
         for player_id, row in latest.items():
             used = (row.explanation or {}).get("availability")
+            model_plays = float(row.predicted_value)
+            if used and used.get("model_p_plays") is not None:
+                model_plays = float(used["model_p_plays"])
             if used:
                 status = AvailabilityStatus(used["status"])
-                group = _group(status, applied=bool(used.get("applied")))
+                group = status_group(status, applied=bool(used.get("applied")))
                 source, reason = str(used.get("source")), used.get("reason")
             else:
                 resolved = resolve_status(
@@ -248,6 +243,8 @@ async def check_games(session: AsyncSession, games: list[Game]) -> RoundCheck:
                     minutes=minutes,
                     dressed=entry is not None,
                     reason=reason,
+                    model_plays=model_plays,
+                    game_id=game.id,
                 )
             )
     result.players.sort(key=lambda p: (GROUPS.index(p.group), p.game_code, p.team, p.player))

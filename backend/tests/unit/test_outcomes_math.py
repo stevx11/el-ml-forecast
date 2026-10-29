@@ -99,3 +99,14 @@ class TestErrorArithmetic:
         for predicted, actual in ((3.0, 9.0), (9.0, 3.0), (-1.0, 1.0)):
             error = predicted - actual
             assert error * error >= 0.0
+
+
+class TestBandStatistics:
+    def test_expected_is_the_mean_stated_probability_not_the_midpoint(self) -> None:
+        from euroleague_ai.ml.outcomes import _bands
+
+        bands = _bands([(0.01, False), (0.03, True), (0.97, True), (0.99, True)])
+        low, high = bands
+        assert low["band"] == "0-10%" and low["expected"] == pytest.approx(0.02)
+        assert low["midpoint"] == pytest.approx(0.05)
+        assert high["expected"] == pytest.approx(0.98) and high["realised"] == 1.0

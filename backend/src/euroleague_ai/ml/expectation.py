@@ -68,7 +68,7 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
     from collections.abc import Sequence
 
     from euroleague_ai.ml.dataset import TrainingRow
-    from euroleague_ai.ml.distribution import ResidualDistribution
+    from euroleague_ai.ml.distribution import ResidualDistribution, ScaleInput
 
 logger = get_logger(__name__)
 
@@ -141,7 +141,7 @@ def shifted_median(
     distribution: ResidualDistribution,
     *,
     histories: Sequence[float | None] | None = None,
-    volatilities: Sequence[float | None] | None = None,
+    volatilities: Sequence[ScaleInput] | None = None,
 ) -> list[float]:
     """Median plus its error cell's mean residual, clipped at zero.
 
@@ -154,7 +154,7 @@ def shifted_median(
         histories = [row.features.get("games_played_career_window") for row in rows]
     if volatilities is None:
         volatilities = (
-            [distribution.volatility_of(row.features) for row in rows]
+            [distribution.scale_input(row.features) for row in rows]
             if rows is not None
             else [None] * len(medians)
         )

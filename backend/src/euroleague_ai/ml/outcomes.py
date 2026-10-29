@@ -98,6 +98,19 @@ def _finished_games(season_code: str | None, as_of: datetime) -> Select[Any]:
     return stmt
 
 
+def _only_active(stmt: Any, *, active_only: bool) -> Any:
+    """Restrict to predictions made by the models active now.
+
+    Season-long tables mix every model version since round 1, so a band that
+    is off may only say an old model was off. ``--active`` judges today's.
+    """
+    if not active_only:
+        return stmt
+    return stmt.join(ModelVersion, ModelVersion.id == Prediction.model_version_id).where(
+        ModelVersion.is_active.is_(True)
+    )
+
+
 async def score_predictions(
     session: AsyncSession,
     *,
@@ -227,6 +240,7 @@ async def accuracy_report(
     *,
     season_code: str | None = None,
     include_absent: bool = False,
+    active_only: bool = False,
 ) -> dict[str, Any]:
     """Realised accuracy and calibration, per target.
 
@@ -254,6 +268,7 @@ async def accuracy_report(
             stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
         if not include_absent:
             stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
+        stmt = _only_active(stmt, active_only=active_only)
 
         count, mae, mse, mean_actual, bias = (await session.execute(stmt)).one()
         if not count:
@@ -268,24 +283,37 @@ async def accuracy_report(
             # broke the models the last time.
             "bias": round(float(bias), 4),
             "expected": await _expected_accuracy(
-                session, target=target, season_code=season_code, include_absent=include_absent
+                session,
+                target=target,
+                season_code=season_code,
+                include_absent=include_absent,
+                active_only=active_only,
             ),
             "interval": await interval_coverage(
                 session,
                 target=target,
                 season_code=season_code,
                 include_absent=include_absent,
+                active_only=active_only,
             ),
         }
 
+    report["active_only"] = active_only
     report["thresholds"] = await threshold_calibration(
-        session, season_code=season_code, include_absent=include_absent
+        session, season_code=season_code, include_absent=include_absent, active_only=active_only
+    )
+    report["thresholds_by_target"] = await threshold_calibration_by_target(
+        session, season_code=season_code, include_absent=include_absent, active_only=active_only
     )
     report["thresholds_overall"] = await overall_threshold_calibration(
-        session, season_code=season_code
+        session, season_code=season_code, active_only=active_only
     )
-    report["availability"] = await availability_report(session, season_code=season_code)
-    report["team_totals"] = await team_totals_report(session, season_code=season_code)
+    report["availability"] = await availability_report(
+        session, season_code=season_code, active_only=active_only
+    )
+    report["team_totals"] = await team_totals_report(
+        session, season_code=season_code, active_only=active_only
+    )
     return report
 
 
@@ -295,6 +323,7 @@ async def _expected_accuracy(
     target: PredictionTarget,
     season_code: str | None,
     include_absent: bool,
+    active_only: bool = False,
 ) -> dict[str, Any]:
     """RMSE and bias of the published expected values, where there are any.
 
@@ -318,6 +347,7 @@ async def _expected_accuracy(
         stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
     if not include_absent:
         stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
+    stmt = _only_active(stmt, active_only=active_only)
     count, mse, bias = (await session.execute(stmt)).one()
     if not count:
         return {"scored": 0}
@@ -361,7 +391,7 @@ def summarise_team_totals(
 
 
 async def team_totals_report(
-    session: AsyncSession, *, season_code: str | None = None
+    session: AsyncSession, *, season_code: str | None = None, active_only: bool = False
 ) -> dict[str, Any]:
     """Do the projected squads add up to the real ones?
 
@@ -400,6 +430,7 @@ async def team_totals_report(
     )
     if season_code:
         stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
+    stmt = _only_active(stmt, active_only=active_only)
 
     latest: dict[tuple[Any, Any, Any], tuple[Any, float, float | None, Any]] = {}
     for game_id, team_id, player_id, target, median, expected, created in (
@@ -449,7 +480,7 @@ async def team_totals_report(
 
 
 async def availability_report(
-    session: AsyncSession, *, season_code: str | None = None
+    session: AsyncSession, *, season_code: str | None = None, active_only: bool = False
 ) -> dict[str, Any]:
     """How the published P(plays) did: calibration, and players used per team.
 
@@ -477,6 +508,7 @@ async def availability_report(
     )
     if season_code:
         stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
+    stmt = _only_active(stmt, active_only=active_only)
 
     rows = (await session.execute(stmt)).all()
     if not rows:
@@ -499,6 +531,7 @@ async def interval_coverage(
     target: PredictionTarget,
     season_code: str | None = None,
     include_absent: bool = False,
+    active_only: bool = False,
 ) -> dict[str, Any]:
     """Did the published 80% interval contain 80% of outcomes?
 
@@ -515,8 +548,10 @@ async def interval_coverage(
         stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
     if not include_absent:
         stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
+    stmt = _only_active(stmt, active_only=active_only)
 
-    rows = (await session.execute(stmt)).all()
+    # JSON null is not SQL NULL: a model without a distribution stores the former.
+    rows = [row for row in (await session.execute(stmt)).all() if row[0]]
     if not rows:
         return {"rows": 0}
 
@@ -544,6 +579,7 @@ async def threshold_calibration(
     *,
     season_code: str | None = None,
     include_absent: bool = False,
+    active_only: bool = False,
 ) -> list[dict[str, Any]]:
     """Compare stated probabilities against realised frequencies.
 
@@ -566,6 +602,7 @@ async def threshold_calibration(
         stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
     if not include_absent:
         stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
+    stmt = _only_active(stmt, active_only=active_only)
 
     return _bands(
         (float(stated), float(actual) >= float(threshold))
@@ -574,8 +611,41 @@ async def threshold_calibration(
     )
 
 
+async def threshold_calibration_by_target(
+    session: AsyncSession,
+    *,
+    season_code: str | None = None,
+    include_absent: bool = False,
+    active_only: bool = False,
+) -> dict[str, list[dict[str, Any]]]:
+    """The same bands, one table per target: a pooled band can hide which stat is off."""
+    stmt = (
+        select(
+            Prediction.target,
+            Prediction.threshold_probabilities,
+            PredictionOutcome.actual_value,
+        )
+        .join(PredictionOutcome, PredictionOutcome.prediction_id == Prediction.id)
+        .join(Game, Game.id == Prediction.game_id)
+        .where(Prediction.threshold_probabilities.isnot(None))
+    )
+    if season_code:
+        stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
+    if not include_absent:
+        stmt = stmt.where(PredictionOutcome.did_not_appear.is_(False))
+    stmt = _only_active(stmt, active_only=active_only)
+
+    pairs: dict[str, list[tuple[float, bool]]] = {}
+    for target, probabilities, actual in (await session.execute(stmt)).all():
+        for threshold, stated in (probabilities or {}).items():
+            pairs.setdefault(str(target), []).append(
+                (float(stated), float(actual) >= float(threshold))
+            )
+    return {target: _bands(items) for target, items in sorted(pairs.items())}
+
+
 async def overall_threshold_calibration(
-    session: AsyncSession, *, season_code: str | None = None
+    session: AsyncSession, *, season_code: str | None = None, active_only: bool = False
 ) -> list[dict[str, Any]]:
     """The same test for the published *overall* chances: P(plays) x P(X+ | plays).
 
@@ -609,6 +679,7 @@ async def overall_threshold_calibration(
     )
     if season_code:
         stmt = stmt.join(Season, Season.id == Game.season_id).where(Season.code == season_code)
+    stmt = _only_active(stmt, active_only=active_only)
     return _bands(
         (float(stated) * float(p_plays), float(actual) >= float(threshold))
         for _id, probabilities, actual, p_plays in (await session.execute(stmt)).all()
@@ -617,14 +688,23 @@ async def overall_threshold_calibration(
 
 
 def _bands(pairs: Any) -> list[dict[str, Any]]:
-    """``(stated probability, happened)`` pairs into ten-point bands."""
-    buckets: dict[tuple[float, float], list[int]] = {band: [0, 0] for band in PROBABILITY_BANDS}
+    """``(stated probability, happened)`` pairs into ten-point bands.
+
+    ``expected`` is the mean stated probability inside the band, not its
+    midpoint. Probabilities are not spread evenly within a band (most of the
+    0-10% band sits near 1-2%, most of 90-100% near 97%), so comparing with the
+    midpoint shows drift that is not there, or hides drift that is.
+    """
+    buckets: dict[tuple[float, float], list[float]] = {
+        band: [0.0, 0.0, 0.0] for band in PROBABILITY_BANDS
+    }
     for probability, happened in pairs:
         for band in PROBABILITY_BANDS:
             low, high = band
             # Upper-inclusive on the last band only, so 1.0 has a home.
             if low <= probability < high or (high == 1.0 and probability == 1.0):
                 buckets[band][0] += 1
+                buckets[band][2] += probability
                 if happened:
                     buckets[band][1] += 1
                 break
@@ -632,11 +712,12 @@ def _bands(pairs: Any) -> list[dict[str, Any]]:
     return [
         {
             "band": f"{int(low * 100)}-{int(high * 100)}%",
-            "predictions": count,
+            "predictions": int(count),
             "realised": round(hits / count, 4) if count else None,
-            "expected": round((low + high) / 2, 4),
+            "expected": round(stated / count, 4),
+            "midpoint": round((low + high) / 2, 4),
         }
-        for (low, high), (count, hits) in buckets.items()
+        for (low, high), (count, hits, stated) in buckets.items()
         if count
     ]
 

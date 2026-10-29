@@ -33,7 +33,9 @@ from euroleague_ai.core.logging import get_logger
 from euroleague_ai.ml.baselines import default_baselines
 from euroleague_ai.ml.dataset import TARGET_FEATURE_STEMS, TrainingRow
 from euroleague_ai.ml.distribution import (
+    SEASON_SHARE_FEATURE,
     ResidualDistribution,
+    ScalingChoice,
     choose_volatility_scaling,
     coverage_report,
     fit_residual_distribution,
@@ -230,42 +232,63 @@ def chronological_split(
     )
 
 
-def _fit_spread(
-    target: PredictionTarget,
-    medians: list[float],
-    actuals: list[float],
-    histories: list[float | None],
-    rows: list[TrainingRow],
-) -> tuple[ResidualDistribution, ResidualDistribution | None, dict[str, Any]]:
-    """The served error distribution, the unscaled one to compare, and the choice.
-
-    The volatility scale (source and power) is chosen on validation alone; see
-    :func:`~euroleague_ai.ml.distribution.choose_volatility_scaling`. When no
-    scale beats the unscaled spread, both are the same and the second is None.
-    """
+def _spread_inputs(
+    target: PredictionTarget, rows: list[TrainingRow]
+) -> tuple[dict[str, list[float | None]], list[float | None]]:
+    """Per row: each candidate volatility, and the share of the window from this season."""
     stem = TARGET_FEATURE_STEMS.get(target)
     candidates = (
         {name: [row.features.get(name) for row in rows] for name in volatility_features(stem)}
         if stem
         else {}
     )
-    choice = choose_volatility_scaling(medians, actuals, histories, candidates)
+    return candidates, [row.features.get(SEASON_SHARE_FEATURE) for row in rows]
+
+
+def _fit_spread(
+    target: PredictionTarget,
+    medians: list[float],
+    actuals: list[float],
+    histories: list[float | None],
+    rows: list[TrainingRow],
+) -> tuple[ResidualDistribution, ResidualDistribution | None, ScalingChoice]:
+    """The error distribution on validation, the unscaled one to compare, and the choice.
+
+    The volatility scale and the early-season widening are chosen on validation
+    alone; see :func:`~euroleague_ai.ml.distribution.choose_volatility_scaling`.
+    When nothing beats the unscaled spread, the second value is None.
+    """
+    candidates, shares = _spread_inputs(target, rows)
+    choice = choose_volatility_scaling(medians, actuals, histories, candidates, shares=shares)
     unscaled = fit_residual_distribution(medians, actuals, histories)
-    if choice.volatility_feature is None:
-        return unscaled, None, choice.as_dict()
-    scaled = fit_residual_distribution(
-        medians,
-        actuals,
-        histories,
-        candidates[choice.volatility_feature],
-        volatility_feature=choice.volatility_feature,
-        scale_power=choice.scale_power,
-    )
+    if choice.volatility_feature is None and choice.season_feature is None:
+        return unscaled, None, choice
     logger.info(
         "per-player spread chosen",
         extra={"target": str(target), **choice.as_dict()},
     )
-    return scaled, unscaled, choice.as_dict()
+    return choice.fit(medians, actuals, histories, candidates, shares), unscaled, choice
+
+
+def _served_spread(
+    target: PredictionTarget,
+    choice: ScalingChoice,
+    medians: list[float],
+    actuals: list[float],
+    rows: list[TrainingRow],
+) -> ResidualDistribution:
+    """The spread actually served: the chosen shape, refitted on validation + test.
+
+    The test period is the most recent data there is, and the booster never
+    trained on it, so its errors are as honest as validation's. Fitting on
+    validation alone serves errors measured a season or more before the games
+    being predicted; the walk-forward folds, whose spread is fitted on the
+    seasons just before the one they test, show what that costs early in a
+    season. Test coverage is still reported from the validation fit, so the
+    numbers in the training report stay out of sample.
+    """
+    candidates, shares = _spread_inputs(target, rows)
+    return choice.fit(medians, actuals, _history_depths(rows), candidates, shares)
 
 
 def _history_depths(rows: list[TrainingRow]) -> list[float | None]:
@@ -446,19 +469,20 @@ def train_target(
         target, calibrated_validation, validation_actuals, validation_history, validation_rows
     )
     stem = TARGET_FEATURE_STEMS.get(target)
+    test_actuals = [float(a) for a in y_test]
     coverage = coverage_report(
         distribution,
         predictions,
-        [float(a) for a in y_test],
+        test_actuals,
         _history_depths(test_rows),
-        volatilities=[distribution.volatility_of(row.features) for row in test_rows],
+        volatilities=[distribution.scale_input(row.features) for row in test_rows],
         group_volatilities=(
             [row.features.get(f"std10_{stem}") for row in test_rows] if stem else None
         ),
         target=str(target),
         reference=unscaled,
     )
-    coverage["spread_scaling"] = scaling
+    coverage["spread_scaling"] = scaling.as_dict()
 
     baseline_name, baseline_metrics = _best_baseline(test_rows, target)
 
@@ -483,6 +507,17 @@ def train_target(
         )
         expectation, expected_booster = fitted.report, fitted.booster
 
+    # Everything above judged the validation fit on test. What is served is the
+    # same shape refitted on the most recent errors too.
+    served = _served_spread(
+        target,
+        scaling,
+        [*calibrated_validation, *predictions],
+        [*validation_actuals, *test_actuals],
+        [*validation_rows, *test_rows],
+    )
+    coverage["served_fit_rows"] = served.sample_size
+
     importance = sorted(
         zip(
             feature_names,
@@ -503,7 +538,7 @@ def train_target(
         metrics=metrics,
         calibration_offset=offset,
         validation_mean_residual=validation_mean_residual,
-        distribution=distribution,
+        distribution=served,
         coverage=coverage,
         raw_metrics=raw_metrics,
         baseline_name=baseline_name,

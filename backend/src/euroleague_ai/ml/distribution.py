@@ -41,6 +41,17 @@ quantiles multiplied by its own ``k``. ``power = 0`` is the unscaled distributio
 exactly as before. The source and the power are chosen on validation alone
 (:func:`choose_volatility_scaling`): fitted on its earlier part, scored by
 quantile loss on its later part, kept only if they beat the unscaled spread.
+
+**Early in a season.** Form windows then reach back into last season, roles
+are new, and the error is wider than the history-depth cells know: in the
+walk-forward folds the season being played covered 77% where full seasons
+covered 79-80%. A second factor widens the spread while little of the player's
+recent window is from this season::
+
+    k_season = 1 + widening * (1 - share of the last 20 games from this season)
+
+The widening is chosen on validation the same way, on top of the volatility
+scale, and kept only if it helps.
 """
 
 from __future__ import annotations
@@ -118,6 +129,22 @@ SCALING_HOLDOUT = 0.4
 #: A scaled spread has to beat the unscaled one by this much quantile loss to
 #: be chosen. Below that the gain is noise, and simpler wins.
 SCALING_MIN_GAIN = 0.002
+
+#: How much of the player's recent window is from this season (0 at round 1).
+SEASON_SHARE_FEATURE = "career_window_is_current_season"
+
+#: Early-season widenings tried: at round 1 the spread is (1 + w) times wider.
+SEASON_WIDENINGS: tuple[float, ...] = (0.05, 0.1, 0.15, 0.2, 0.3, 0.5)
+
+#: What scales one prediction's spread: its volatility, or (volatility, share
+#: of the window from this season). A bare number is a volatility.
+ScaleInput = float | tuple[float | None, float | None] | None
+
+
+def _split_input(value: ScaleInput) -> tuple[float | None, float | None]:
+    if isinstance(value, tuple):
+        return _finite(value[0]), _finite(value[1])
+    return _finite(value), None
 
 
 def volatility_features(stem: str) -> tuple[str, ...]:
@@ -253,6 +280,11 @@ class ResidualDistribution:
     scale_power: float = 0.0
     #: Level bucket to the median volatility in it, the reference for ``k``.
     volatility_reference: dict[str, float] = field(default_factory=dict)
+    #: The feature saying how much of the window is from this season, ``None``
+    #: when there is no early-season widening.
+    season_feature: str | None = None
+    #: At a share of 0 the spread is ``1 + season_widening`` times wider.
+    season_widening: float = 0.0
 
     def level_bucket(self, predicted: float) -> int:
         for index, edge in enumerate(self.level_edges):
@@ -261,8 +293,16 @@ class ResidualDistribution:
         return len(self.level_edges)
 
     @property
-    def scaled(self) -> bool:
+    def volatility_scaled(self) -> bool:
         return bool(self.volatility_feature) and self.scale_power > 0
+
+    @property
+    def season_scaled(self) -> bool:
+        return bool(self.season_feature) and self.season_widening > 0
+
+    @property
+    def scaled(self) -> bool:
+        return self.volatility_scaled or self.season_scaled
 
     def volatility_of(self, features: dict[str, Any]) -> float | None:
         """This distribution's volatility input, read from a feature vector."""
@@ -270,18 +310,29 @@ class ResidualDistribution:
             return None
         return _finite(features.get(self.volatility_feature))
 
-    def scale(self, predicted: float, volatility: float | None) -> float:
+    def scale_input(self, features: dict[str, Any]) -> ScaleInput:
+        """Everything that scales this player's spread, read from his features."""
+        share = _finite(features.get(self.season_feature)) if self.season_feature else None
+        return (self.volatility_of(features), share)
+
+    def scale(self, predicted: float, volatility: ScaleInput) -> float:
         """The player's spread relative to his cell's: 1.0 when unknown or unscaled."""
         if not self.scaled:
             return 1.0
-        value = _finite(volatility)
-        reference = self.volatility_reference.get(str(self.level_bucket(predicted)))
-        if value is None or not reference or reference <= 0:
-            return 1.0
-        low, high = SCALE_BOUNDS
-        if value <= 0:
-            return low
-        return float(min(high, max(low, (value / reference) ** self.scale_power)))
+        value, share = _split_input(volatility)
+        k = 1.0
+        if self.volatility_scaled:
+            reference = self.volatility_reference.get(str(self.level_bucket(predicted)))
+            if value is not None and reference and reference > 0:
+                low, high = SCALE_BOUNDS
+                k = (
+                    low
+                    if value <= 0
+                    else min(high, max(low, (value / reference) ** self.scale_power))
+                )
+        if self.season_scaled and share is not None:
+            k *= 1.0 + self.season_widening * (1.0 - min(1.0, max(0.0, share)))
+        return float(k)
 
     def residuals_for(self, predicted: float, games_played: float | None) -> list[float]:
         """The most specific residual sample that is large enough to trust."""
@@ -299,7 +350,7 @@ class ResidualDistribution:
         return self.pooled
 
     def quantiles(
-        self, predicted: float, games_played: float | None, volatility: float | None = None
+        self, predicted: float, games_played: float | None, volatility: ScaleInput = None
     ) -> dict[str, float]:
         """Predicted quantiles, clipped at zero and forced non-decreasing.
 
@@ -321,7 +372,7 @@ class ResidualDistribution:
         predicted: float,
         games_played: float | None,
         threshold: float,
-        volatility: float | None = None,
+        volatility: ScaleInput = None,
     ) -> float:
         """P(actual >= threshold), from the held-out error distribution."""
         residuals = self.residuals_for(predicted, games_played)
@@ -329,7 +380,7 @@ class ResidualDistribution:
         return round(_fraction_at_least(residuals, (threshold - predicted) / k), 4)
 
     def mean_residual(
-        self, predicted: float, games_played: float | None, volatility: float | None = None
+        self, predicted: float, games_played: float | None, volatility: ScaleInput = None
     ) -> float:
         """Mean of ``actual - predicted`` in this prediction's error cell.
 
@@ -344,7 +395,7 @@ class ResidualDistribution:
         return self.scale(predicted, volatility) * sum(residuals) / len(residuals)
 
     def spread(
-        self, predicted: float, games_played: float | None, volatility: float | None = None
+        self, predicted: float, games_played: float | None, volatility: ScaleInput = None
     ) -> float:
         """Robust standard deviation, from the 10-90 range.
 
@@ -359,7 +410,7 @@ class ResidualDistribution:
         return round(max(0.0, width / 2.563), 4)
 
     def confidence(
-        self, predicted: float, games_played: float | None, volatility: float | None = None
+        self, predicted: float, games_played: float | None, volatility: ScaleInput = None
     ) -> float:
         """How tight this prediction is relative to a typical one, in (0, 1].
 
@@ -401,6 +452,8 @@ class ResidualDistribution:
             "volatility_feature": self.volatility_feature,
             "scale_power": self.scale_power,
             "volatility_reference": self.volatility_reference,
+            "season_feature": self.season_feature,
+            "season_widening": self.season_widening,
         }
 
     @classmethod
@@ -419,6 +472,8 @@ class ResidualDistribution:
             volatility_reference={
                 k: float(v) for k, v in (payload.get("volatility_reference") or {}).items()
             },
+            season_feature=payload.get("season_feature"),
+            season_widening=float(payload.get("season_widening") or 0.0),
         )
 
 
@@ -430,6 +485,9 @@ def fit_residual_distribution(
     *,
     volatility_feature: str | None = None,
     scale_power: float = 0.0,
+    shares: list[float | None] | None = None,
+    season_feature: str | None = None,
+    season_widening: float = 0.0,
 ) -> ResidualDistribution:
     """Fit on held-out predictions -- validation, never test.
 
@@ -439,12 +497,16 @@ def fit_residual_distribution(
 
     With ``volatility_feature`` and a positive ``scale_power``, ``volatilities``
     (that feature's value per row) scale each residual by the player's own
-    swing; see the module docstring. Without them the fit is unscaled.
+    swing; see the module docstring. ``shares`` with ``season_feature`` and a
+    positive ``season_widening`` widen it early in a season. Without them the
+    fit is unscaled.
     """
     if not (len(predictions) == len(actuals) == len(games_played)):
         raise ValueError("predictions, actuals and games_played must align")
     if volatilities is not None and len(volatilities) != len(predictions):
         raise ValueError("volatilities must align with predictions")
+    if shares is not None and len(shares) != len(predictions):
+        raise ValueError("shares must align with predictions")
 
     ordered_predictions = sorted(predictions)
     level_edges = [
@@ -471,13 +533,20 @@ def fit_residual_distribution(
         distribution.volatility_reference = {
             key: round(statistics.median(values), 4) for key, values in by_level.items()
         }
+    season: list[float | None] = [None] * len(predictions)
+    if season_feature and season_widening > 0 and shares is not None:
+        distribution.season_feature = season_feature
+        distribution.season_widening = float(season_widening)
+        season = [_finite(v) for v in shares]
 
     raw_cells: dict[str, list[float]] = {}
     raw_history: dict[str, list[float]] = {}
     pooled: list[float] = []
 
-    for predicted, actual, games, vol in zip(predictions, actuals, games_played, vols, strict=True):
-        k = distribution.scale(float(predicted), vol)
+    for predicted, actual, games, vol, share in zip(
+        predictions, actuals, games_played, vols, season, strict=True
+    ):
+        k = distribution.scale(float(predicted), (vol, share))
         residual = (float(actual) - float(predicted)) / k
         history = history_bucket(games)
         key = f"{distribution.level_bucket(float(predicted))}:{history}"
@@ -503,7 +572,7 @@ def quantile_loss(
     predictions: list[float],
     actuals: list[float],
     games_played: list[float | None],
-    volatilities: list[float | None] | None = None,
+    volatilities: list[ScaleInput] | None = None,
 ) -> float:
     """Mean pinball loss over :data:`QUANTILE_LEVELS`: lower is a better spread.
 
@@ -513,7 +582,7 @@ def quantile_loss(
     """
     if not predictions:
         return float("nan")
-    vols: list[float | None] = (
+    vols: list[ScaleInput] = (
         list(volatilities) if volatilities is not None else [None] * len(predictions)
     )
     total = 0.0
@@ -533,13 +602,38 @@ class ScalingChoice:
     scale_power: float
     #: Holdout quantile loss per candidate, ``"unscaled"`` included.
     scores: dict[str, float]
+    season_feature: str | None = None
+    season_widening: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
             "volatility_feature": self.volatility_feature,
             "scale_power": self.scale_power,
+            "season_feature": self.season_feature,
+            "season_widening": self.season_widening,
             "holdout_quantile_loss": self.scores,
         }
+
+    def fit(
+        self,
+        predictions: list[float],
+        actuals: list[float],
+        games_played: list[float | None],
+        volatilities: dict[str, list[float | None]],
+        shares: list[float | None] | None,
+    ) -> ResidualDistribution:
+        """The chosen spread, fitted on these rows."""
+        return fit_residual_distribution(
+            predictions,
+            actuals,
+            games_played,
+            volatilities.get(self.volatility_feature) if self.volatility_feature else None,
+            volatility_feature=self.volatility_feature,
+            scale_power=self.scale_power,
+            shares=shares,
+            season_feature=self.season_feature,
+            season_widening=self.season_widening,
+        )
 
 
 def choose_volatility_scaling(
@@ -548,16 +642,19 @@ def choose_volatility_scaling(
     games_played: list[float | None],
     candidates: dict[str, list[float | None]],
     *,
+    shares: list[float | None] | None = None,
     powers: tuple[float, ...] = SCALE_POWERS,
+    widenings: tuple[float, ...] = SEASON_WIDENINGS,
     holdout: float = SCALING_HOLDOUT,
     min_gain: float = SCALING_MIN_GAIN,
 ) -> ScalingChoice:
-    """Pick a volatility source and power on validation alone.
+    """Pick a volatility source and power, then an early-season widening.
 
     Rows must be in time order. Every candidate (and the unscaled incumbent) is
     fitted on the earlier part and scored on the later part with
-    :func:`quantile_loss`. A candidate wins only if it beats the unscaled loss
-    by ``min_gain`` (relative); otherwise the spread stays unscaled.
+    :func:`quantile_loss`. A candidate wins only if it beats the incumbent by
+    ``min_gain`` (relative). The widening is tried on top of whichever
+    volatility scale won, and kept on the same terms.
     """
     n = len(predictions)
     cut = n - int(n * holdout)
@@ -587,9 +684,40 @@ def choose_volatility_scaling(
                 best = (loss, feature, power)
 
     loss, chosen, power = best
-    if chosen is None or loss > scores["unscaled"] * (1.0 - min_gain):
-        return ScalingChoice(None, 0.0, scores)
-    return ScalingChoice(chosen, power, scores)
+    choice = ScalingChoice(None, 0.0, scores)
+    incumbent = scores["unscaled"]
+    if chosen is not None and loss <= scores["unscaled"] * (1.0 - min_gain):
+        choice = ScalingChoice(chosen, power, scores)
+        incumbent = loss
+    if shares is None:
+        return choice
+
+    vol_fit = candidates.get(choice.volatility_feature) if choice.volatility_feature else None
+    held_vols: list[float | None] = (
+        part(vol_fit, False) if vol_fit is not None else [None] * (n - cut)
+    )
+    best_widening: tuple[float, float] = (incumbent, 0.0)
+    for widening in widenings:
+        fitted = fit_residual_distribution(
+            *fit_args,
+            part(vol_fit, True) if vol_fit is not None else None,
+            volatility_feature=choice.volatility_feature,
+            scale_power=choice.scale_power,
+            shares=part(shares, True),
+            season_feature=SEASON_SHARE_FEATURE,
+            season_widening=widening,
+        )
+        held: list[ScaleInput] = [
+            (v, s) for v, s in zip(held_vols, part(shares, False), strict=True)
+        ]
+        loss = quantile_loss(fitted, *score_args, held)
+        scores[f"season+{widening}"] = round(loss, 5)
+        if loss < best_widening[0]:
+            best_widening = (loss, widening)
+    if best_widening[1] > 0 and best_widening[0] <= incumbent * (1.0 - min_gain):
+        choice.season_feature = SEASON_SHARE_FEATURE
+        choice.season_widening = best_widening[1]
+    return choice
 
 
 #: Groups for coverage by volatility: below the 1/3 and above the 2/3 quantile
@@ -618,7 +746,7 @@ def _interval_hits(
     predicted: float,
     actual: float,
     games: float | None,
-    volatility: float | None,
+    volatility: ScaleInput,
 ) -> tuple[bool, bool, bool]:
     """(inside 80%, below it, inside 50%) for one outcome."""
     quantiles = distribution.quantiles(predicted, games, volatility)
@@ -635,13 +763,13 @@ def threshold_brier(
     predictions: list[float],
     actuals: list[float],
     games_played: list[float | None],
-    volatilities: list[float | None] | None = None,
+    volatilities: list[ScaleInput] | None = None,
 ) -> float | None:
     """Mean Brier score of the published P(X+) chances, every threshold pooled."""
     bars = thresholds_for(target)
     if not bars or not predictions:
         return None
-    vols: list[float | None] = (
+    vols: list[ScaleInput] = (
         list(volatilities) if volatilities is not None else [None] * len(predictions)
     )
     total = 0.0
@@ -662,7 +790,7 @@ def coverage_report(
     actuals: list[float],
     games_played: list[float | None],
     *,
-    volatilities: list[float | None] | None = None,
+    volatilities: list[ScaleInput] | None = None,
     group_volatilities: list[float | None] | None = None,
     target: str | None = None,
     reference: ResidualDistribution | None = None,
@@ -682,7 +810,7 @@ def coverage_report(
     the published P(X+) chances is added. With ``reference`` (the unscaled
     distribution), the same numbers are reported for it, to compare.
     """
-    vols: list[float | None] = (
+    vols: list[ScaleInput] = (
         list(volatilities) if volatilities is not None else [None] * len(predictions)
     )
     inside_80 = 0

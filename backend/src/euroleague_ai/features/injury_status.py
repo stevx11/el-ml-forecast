@@ -17,13 +17,11 @@ Among the reports that still apply, the newest wins (by when the status changed,
 then by when we recorded it), so "out" on Monday and "available" on Thursday
 resolve to available.
 
-**What the prediction does with it.** Only certainties change a number:
-:data:`RULES_OUT` sets P(plays) to zero. "Questionable", "doubtful" and
-"probable" are shown, and kept as history, but do not touch the model's
-probability. There is no record yet of how often a EuroLeague "game-time
-decision" plays, and an invented discount would be a guess presented as a
-measurement. Once a season of reports has accumulated, those labels can become
-calibrated features.
+**What the prediction does with it.** :data:`RULES_OUT` sets P(plays) to zero.
+"Questionable", "doubtful", "probable" and "ready" move the model's probability
+by an amount measured on scored rounds, once that measurement has earned its
+place (see :mod:`euroleague_ai.ml.status_calibration`). Until then they are
+shown, and kept as history, and change nothing.
 """
 
 from __future__ import annotations
@@ -95,6 +93,19 @@ class ResolvedStatus:
             "reported_at": r.observed_at.isoformat(),
             "report_id": str(r.id),
         }
+
+
+def status_group(status: AvailabilityStatus, *, applied: bool) -> str:
+    """The label a report gives a player: what ``injuries check`` groups by and
+    what :mod:`euroleague_ai.ml.status_calibration` adjusts P(plays) for."""
+    if status in RULES_OUT:
+        return "ruled out" if applied else "out (news, not applied)"
+    return {
+        AvailabilityStatus.DOUBTFUL: "doubtful",
+        AvailabilityStatus.QUESTIONABLE: "questionable",
+        AvailabilityStatus.PROBABLE: "probable",
+        AvailabilityStatus.AVAILABLE: "ready",
+    }.get(status, "questionable")
 
 
 def resolve_status(

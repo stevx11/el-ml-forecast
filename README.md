@@ -93,6 +93,7 @@ euroleague-ai news extract --replace --days 30              # re-read stored art
 euroleague-ai injuries report                               # read the daily injury table, record what changed
 euroleague-ai injuries list                                 # reports that apply to next games
 euroleague-ai injuries check --round 7                      # after a round: did ruled-out players sit, ready ones play?
+euroleague-ai injuries calibrate                            # after a round: how much each label (probable, questionable...) moves P(plays)
 euroleague-ai injuries set Petrovic out --reason knee      # manual override (before T-60 min)
 euroleague-ai ml ablate                                     # which v6 feature families help? (after the v6 backfill)
 euroleague-ai ml spread                                     # are projections as spread out as real box scores?
@@ -102,6 +103,7 @@ euroleague-ai ml predict --days 7                           # project upcoming f
 euroleague-ai ml why --game-code 120 --player petrovic      # explain one projection
 euroleague-ai ml score                                      # score finished games
 euroleague-ai ml accuracy                                   # realised accuracy + calibration
+euroleague-ai ml accuracy --active                          # the same, for the models active now only
 euroleague-ai ml accuracy --by-version                      # live error per model version; new vs old on the same player-games
 euroleague-ai lineups probe --hours 6 --watch               # when do starting fives appear? (measurement, stores nothing)
 ```

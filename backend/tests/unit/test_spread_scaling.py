@@ -15,6 +15,7 @@ import pytest
 
 from euroleague_ai.ml.distribution import (
     SCALE_BOUNDS,
+    SEASON_SHARE_FEATURE,
     ResidualDistribution,
     choose_volatility_scaling,
     coverage_report,
@@ -211,3 +212,87 @@ class TestExpectedValue:
             [12.0, 12.0], None, distribution, histories=[40.0, 40.0], volatilities=[1.0, 3.0]
         )
         assert streaky - 12.0 > 1.5 * (steady - 12.0) > 0
+
+
+def _season(
+    *, early_widens: bool, n: int = 9000, seed: int = 17
+) -> tuple[list[float], list[float], list[float | None], list[float | None]]:
+    """Projections, outcomes, history and share of the window from this season.
+
+    Rows cycle through seasons in time order. In the league where early games
+    are harder, the error at share 0 is 1.6 times the error at share 1.
+    """
+    rng = random.Random(seed)
+    predictions: list[float] = []
+    actuals: list[float] = []
+    histories: list[float | None] = []
+    shares: list[float | None] = []
+    for i in range(n):
+        share = (i % 300) / 300
+        predicted = rng.uniform(4.0, 20.0)
+        sigma = 2.0 * (1.0 + 0.6 * (1.0 - share)) if early_widens else 2.6
+        predictions.append(predicted)
+        actuals.append(max(0.0, predicted + rng.gauss(0.0, sigma)))
+        histories.append(40.0)
+        shares.append(share)
+    return predictions, actuals, histories, shares
+
+
+class TestEarlySeason:
+    def test_widening_is_chosen_when_early_games_are_harder(self) -> None:
+        p, a, h, s = _season(early_widens=True)
+        choice = choose_volatility_scaling(p, a, h, {}, shares=s)
+        assert choice.season_feature == SEASON_SHARE_FEATURE
+        assert choice.season_widening >= 0.3
+        assert choice.volatility_feature is None
+
+    def test_widening_is_refused_when_they_are_not(self) -> None:
+        p, a, h, s = _season(early_widens=False)
+        choice = choose_volatility_scaling(p, a, h, {}, shares=s)
+        assert choice.season_feature is None
+        assert choice.season_widening == 0.0
+
+    def test_round_one_is_wider_than_a_full_window(self) -> None:
+        p, a, h, s = _season(early_widens=True)
+        distribution = fit_residual_distribution(
+            p, a, h, shares=s, season_feature=SEASON_SHARE_FEATURE, season_widening=0.5
+        )
+        early = distribution.quantiles(12.0, 40.0, (None, 0.0))
+        late = distribution.quantiles(12.0, 40.0, (None, 1.0))
+        assert early["0.9"] - early["0.1"] == pytest.approx(
+            1.5 * (late["0.9"] - late["0.1"]), rel=0.02
+        )
+        # Unknown share: no widening either way.
+        assert distribution.scale(12.0, (None, None)) == 1.0
+        assert distribution.scale_input({SEASON_SHARE_FEATURE: 0.25}) == (None, 0.25)
+
+    def test_early_season_coverage_is_fixed(self) -> None:
+        p, a, h, s = _season(early_widens=True, n=12000)
+        (fp, tp), (fa, ta), (fh, th), (fs, ts) = (_split(x) for x in (p, a, h, s))
+        unscaled = fit_residual_distribution(fp, fa, fh)
+        choice = choose_volatility_scaling(fp, fa, fh, {}, shares=fs)
+        widened = choice.fit(fp, fa, fh, {}, fs)
+
+        def early_coverage(distribution: ResidualDistribution, inputs: bool) -> float:
+            rows = [i for i, share in enumerate(ts) if share is not None and share < 0.2]
+            sub = [tp[i] for i in rows], [ta[i] for i in rows], [th[i] for i in rows]
+            report = coverage_report(
+                distribution,
+                *sub,
+                volatilities=[(None, ts[i]) for i in rows] if inputs else None,
+            )
+            return float(report["covered_80"])
+
+        assert early_coverage(unscaled, False) < 0.74
+        assert early_coverage(widened, True) == pytest.approx(0.80, abs=0.035)
+
+    def test_round_trip_keeps_the_widening(self) -> None:
+        p, a, h, s = _season(early_widens=True, n=2000)
+        distribution = fit_residual_distribution(
+            p, a, h, shares=s, season_feature=SEASON_SHARE_FEATURE, season_widening=0.3
+        )
+        restored = ResidualDistribution.from_dict(distribution.to_dict())
+        assert restored.season_widening == 0.3
+        assert restored.quantiles(10.0, 30.0, (None, 0.1)) == distribution.quantiles(
+            10.0, 30.0, (None, 0.1)
+        )

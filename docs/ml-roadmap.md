@@ -308,6 +308,27 @@ stays unscaled, exactly as before. `ml train` prints the choice, the 80% coverag
 volatility third next to the unscaled coverage, and the Brier score of the published P(X+)
 chances next to the unscaled one. A model trained before this loads unscaled.
 
+**Early in a season** the error is wider than the history-depth cells know: form windows
+still reach into last season and roles are new. In the walk-forward folds the season being
+played covered 77% where full seasons covered 79-80%, and live coverage was 76-77%. A second
+factor, chosen on validation the same way and on top of the volatility scale, widens the
+spread while little of the player's last 20 games is from this season:
+`k_season = 1 + w * (1 - share)`, with `w` from 0.05 to 0.5.
+
+**What is served** is the chosen shape refitted on validation + test, the most recent
+errors there are (the booster never trained on either). The coverage and Brier numbers in
+the training report still come from the validation fit, so they stay out of sample.
+
+### Injury labels and P(plays)
+
+"Probable", "questionable", "doubtful", "ready" and unapplied news "out" readings move
+P(plays) by one log-odds shift per label, fitted on scored rounds with a normal prior on
+the shift (sd 1), and switched on only if each round, scored by the other rounds' fit, has
+a lower log loss than the model alone (`injuries calibrate`, after each scored round).
+Round 8 showed why: players listed probable got a mean P(plays) of 0.33 and 69% played.
+The model's own P(plays) is kept in each prediction (`availability.model_p_plays`), so
+every refit starts from it.
+
 ---
 
 ## Feature set v6

@@ -13,7 +13,12 @@ from euroleague_ai.features.backfill import backfill_snapshots
 from euroleague_ai.features.registry import FEATURE_SET_VERSION
 from euroleague_ai.ml.availability import derive_feature_names, load_availability_rows
 from euroleague_ai.ml.inference import LoadedModel, predict_game
-from euroleague_ai.ml.outcomes import accuracy_by_version, head_to_head, score_predictions
+from euroleague_ai.ml.outcomes import (
+    accuracy_by_version,
+    accuracy_report,
+    head_to_head,
+    score_predictions,
+)
 from euroleague_ai.models.enums import PredictionTarget
 from euroleague_ai.models.prediction import ModelVersion
 from euroleague_ai.providers.base import SeasonRef
@@ -102,3 +107,17 @@ async def test_each_version_is_scored_on_its_own(
     assert pair["shared"] == 4
     assert pair["newer_error"] == pytest.approx(points[1]["error"])
     assert pair["older_error"] == pytest.approx(points[0]["error"])
+
+
+async def test_active_only_keeps_todays_models(
+    session: AsyncSession, fixture_provider: FixtureProvider, season: SeasonRef, settings: Settings
+) -> None:
+    await _seed_absences(session, fixture_provider, season)
+    await _two_versions_on_game6(session, settings)
+    await score_predictions(session, game_codes=[6], clock=AFTER_SEASON)
+
+    everything = await accuracy_report(session)
+    active = await accuracy_report(session, active_only=True)
+    assert everything["targets"]["POINTS"]["scored"] == 8
+    assert active["targets"]["POINTS"]["scored"] == 4
+    assert active["active_only"] is True
